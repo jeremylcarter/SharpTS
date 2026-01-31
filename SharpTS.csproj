@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -46,6 +46,12 @@
     <None Remove="SharpTS.Sdk/**" />
     <Compile Remove="SharpTS.Sdk.Tasks/**" />
     <None Remove="SharpTS.Sdk.Tasks/**" />
+    <Compile Remove="SharpTS.Node/**" />
+    <None Remove="SharpTS.Node/**" />
+    <Compile Remove="SharpTS.Node.Tests/**" />
+    <None Remove="SharpTS.Node.Tests/**" />
+    <Compile Remove="ReferenceExamples/**" />
+    <None Remove="ReferenceExamples/**" />
   </ItemGroup>
 
   <ItemGroup>
@@ -56,6 +62,10 @@
     <PackageReference Include="NuGet.Packaging" Version="7.0.1" />
     <PackageReference Include="NuGet.Protocol" Version="7.0.1" />
     <PackageReference Include="ZstdSharp.Port" Version="0.8.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="SharpTS.Node\SharpTS.Node.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1093,7 +1093,105 @@ public static class BuiltInModuleTypes
             "string_decoder" => GetStringDecoderModuleTypes(),
             "perf_hooks" => GetPerfHooksModuleTypes(),
             "stream" => GetStreamModuleTypes(),
+            "http" => GetHttpModuleTypes(),
             _ => null
+        };
+    }
+
+    /// <summary>
+    /// Gets the exported types for the http module.
+    /// </summary>
+    public static Dictionary<string, TypeInfo> GetHttpModuleTypes()
+    {
+        var numberType = new TypeInfo.Primitive(TokenType.TYPE_NUMBER);
+
+        // Define the Server type (returned by createServer)
+        var serverType = new TypeInfo.Record(new Dictionary<string, TypeInfo>
+        {
+            ["listen"] = new TypeInfo.Function(
+                [numberType, new TypeInfo.Any(), new TypeInfo.Any()],
+                new TypeInfo.Any(),
+                RequiredParams: 1
+            ),
+            ["close"] = new TypeInfo.Function(
+                [new TypeInfo.Any()],
+                new TypeInfo.Any(),
+                RequiredParams: 0
+            ),
+            ["address"] = new TypeInfo.Function(
+                [],
+                new TypeInfo.Any()
+            ),
+            ["on"] = new TypeInfo.Function(
+                [new TypeInfo.String(), new TypeInfo.Any()],
+                new TypeInfo.Any()
+            ),
+            ["listening"] = BooleanType
+        }.ToFrozenDictionary());
+
+        // Define IncomingMessage type (request)
+        var incomingMessageType = new TypeInfo.Record(new Dictionary<string, TypeInfo>
+        {
+            ["method"] = new TypeInfo.String(),
+            ["url"] = new TypeInfo.String(),
+            ["httpVersion"] = new TypeInfo.String(),
+            ["headers"] = new TypeInfo.Record(new Dictionary<string, TypeInfo>().ToFrozenDictionary())
+        }.ToFrozenDictionary());
+
+        // Define ServerResponse type (response)
+        var serverResponseType = new TypeInfo.Record(new Dictionary<string, TypeInfo>
+        {
+            ["statusCode"] = numberType,
+            ["statusMessage"] = new TypeInfo.String(),
+            ["headersSent"] = BooleanType,
+            ["finished"] = BooleanType,
+            ["writeHead"] = new TypeInfo.Function(
+                [numberType, new TypeInfo.Any(), new TypeInfo.Any()],
+                new TypeInfo.Any(),
+                RequiredParams: 1
+            ),
+            ["setHeader"] = new TypeInfo.Function(
+                [new TypeInfo.String(), new TypeInfo.String()],
+                new TypeInfo.Any()
+            ),
+            ["getHeader"] = new TypeInfo.Function(
+                [new TypeInfo.String()],
+                new TypeInfo.Any()
+            ),
+            ["hasHeader"] = new TypeInfo.Function(
+                [new TypeInfo.String()],
+                BooleanType
+            ),
+            ["removeHeader"] = new TypeInfo.Function(
+                [new TypeInfo.String()],
+                new TypeInfo.Any()
+            ),
+            ["write"] = new TypeInfo.Function(
+                [new TypeInfo.String()],
+                BooleanType
+            ),
+            ["end"] = new TypeInfo.Function(
+                [new TypeInfo.Any()],
+                new TypeInfo.Any(),
+                RequiredParams: 0
+            )
+        }.ToFrozenDictionary());
+
+        // Request handler callback type: (req, res) => void
+        var requestHandlerType = new TypeInfo.Function(
+            [incomingMessageType, serverResponseType],
+            new TypeInfo.Void()
+        );
+
+        return new Dictionary<string, TypeInfo>
+        {
+            ["createServer"] = new TypeInfo.Function(
+                [requestHandlerType],
+                serverType,
+                RequiredParams: 0
+            ),
+            ["METHODS"] = new TypeInfo.Array(new TypeInfo.String()),
+            ["STATUS_CODES"] = new TypeInfo.Record(new Dictionary<string, TypeInfo>().ToFrozenDictionary())
         };
     }
 

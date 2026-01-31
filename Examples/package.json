@@ -1,0 +1,14 @@
+{
+  "name": "sharpts-examples",
+  "version": "1.0.0",
+  "description": "Example TypeScript files for SharpTS",
+  "type": "module",
+  "scripts": {
+    "http": "tsx http.ts",
+    "http-server": "tsx http-server.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "@types/node": "^22.0.0"
+  }
+}

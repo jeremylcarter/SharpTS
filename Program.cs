@@ -178,6 +178,12 @@ static void RunModuleFile(string absolutePath, DecoratorMode decoratorMode, bool
         }
 
         interpreter.InterpretModules(allModules, resolver, typeMap);
+
+        // Run event loop if there are active handles (servers, timers, etc.)
+        if (interpreter.HasActiveHandles)
+        {
+            interpreter.RunEventLoop();
+        }
     }
     catch (Exception ex)
     {

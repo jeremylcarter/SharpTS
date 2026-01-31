@@ -10,7 +10,7 @@ namespace SharpTS.Runtime.Types;
 /// Provides event subscription, emission, and management following Node.js EventEmitter semantics.
 /// Supports once listeners, prepend operations, listener inspection, and max listener warnings.
 /// </remarks>
-public class SharpTSEventEmitter
+public class SharpTSEventEmitter : ISharpTSPropertyAccessor
 {
     /// <summary>
     /// Wraps a listener function with metadata for once tracking.
@@ -63,6 +63,35 @@ public class SharpTSEventEmitter
             _ => null
         };
     }
+
+    /// <summary>
+    /// Gets a property value by name. Required by ISharpTSPropertyAccessor.
+    /// </summary>
+    public virtual object? GetProperty(string name) => GetMember(name);
+
+    /// <summary>
+    /// Sets a property value. EventEmitter is immutable, so this is a no-op.
+    /// </summary>
+    public virtual void SetProperty(string name, object? value)
+    {
+        // EventEmitter properties are read-only methods
+    }
+
+    /// <summary>
+    /// Checks if a property exists.
+    /// </summary>
+    public virtual bool HasProperty(string name) => GetMember(name) != null;
+
+    /// <summary>
+    /// Gets all property names for iteration.
+    /// </summary>
+    public virtual IEnumerable<string> PropertyNames => new[]
+    {
+        "on", "addListener", "once", "off", "removeListener", "emit",
+        "removeAllListeners", "listeners", "rawListeners", "listenerCount",
+        "eventNames", "prependListener", "prependOnceListener",
+        "setMaxListeners", "getMaxListeners"
+    };
 
     /// <summary>
     /// Adds a listener for the specified event.
@@ -136,6 +165,45 @@ public class SharpTSEventEmitter
         // Snapshot the listeners to handle modifications during emit
         var snapshot = listeners.ToList();
         var eventArgs = args.Count > 1 ? args.Skip(1).ToList() : [];
+
+        foreach (var wrapper in snapshot)
+        {
+            // Remove once listeners before calling
+            if (wrapper.Once)
+            {
+                var index = listeners.FindIndex(w => ReferenceEquals(w, wrapper));
+                if (index >= 0)
+                {
+                    listeners.RemoveAt(index);
+                    if (listeners.Count == 0)
+                        _events.Remove(eventName);
+                }
+            }
+
+            // Call the listener
+            if (wrapper.Listener is ISharpTSCallable callable)
+            {
+                callable.Call(interpreter, eventArgs);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Emits an event with an interpreter reference. Protected for use by subclasses.
+    /// </summary>
+    /// <param name="interpreter">The interpreter to use for calling listeners.</param>
+    /// <param name="eventName">The name of the event to emit.</param>
+    /// <param name="eventArgs">The arguments to pass to listeners.</param>
+    /// <returns>True if any listeners were called, false otherwise.</returns>
+    protected bool EmitWithInterpreter(Interp interpreter, string eventName, List<object?> eventArgs)
+    {
+        if (!_events.TryGetValue(eventName, out var listeners) || listeners.Count == 0)
+            return false;
+
+        // Snapshot the listeners to handle modifications during emit
+        var snapshot = listeners.ToList();
 
         foreach (var wrapper in snapshot)
         {
@@ -290,8 +358,9 @@ public class SharpTSEventEmitter
 
     /// <summary>
     /// Internal method to add a listener with various options.
+    /// Protected for use by subclasses like HttpServerInstance.
     /// </summary>
-    private void AddListenerInternal(string eventName, object listener, bool once, bool prepend)
+    protected void AddListenerInternal(string eventName, object listener, bool once, bool prepend)
     {
         if (!_events.TryGetValue(eventName, out var listeners))
         {

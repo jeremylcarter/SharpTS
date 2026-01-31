@@ -80,6 +80,10 @@ public partial class Interpreter : IDisposable, IExprVisitor<object?>, IStmtVisi
     private readonly List<VirtualTimer> _virtualTimers = new();
     private readonly object _virtualTimersLock = new();
 
+    // Active handles counter - keeps the event loop alive while there are active operations
+    private int _activeHandles;
+    private readonly object _activeHandlesLock = new();
+
     /// <summary>
     /// Represents a scheduled timer callback that will be executed by the main thread.
     /// </summary>
@@ -133,6 +137,55 @@ public partial class Interpreter : IDisposable, IExprVisitor<object?>, IStmtVisi
             _virtualTimers.Add(timer);
         }
         return timer;
+    }
+
+    /// <summary>
+    /// Increments the active handles count. Used by servers, timers, etc. to keep the event loop alive.
+    /// </summary>
+    internal void Ref()
+    {
+        lock (_activeHandlesLock)
+        {
+            _activeHandles++;
+        }
+    }
+
+    /// <summary>
+    /// Decrements the active handles count. When count reaches zero, the event loop can exit.
+    /// </summary>
+    internal void Unref()
+    {
+        lock (_activeHandlesLock)
+        {
+            _activeHandles--;
+        }
+    }
+
+    /// <summary>
+    /// Gets whether there are active handles keeping the event loop alive.
+    /// </summary>
+    internal bool HasActiveHandles
+    {
+        get
+        {
+            lock (_activeHandlesLock)
+            {
+                return _activeHandles > 0;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs the event loop, processing callbacks until there are no more active handles.
+    /// This is the main loop that keeps the program alive for servers, timers, etc.
+    /// </summary>
+    public void RunEventLoop()
+    {
+        while (HasActiveHandles && !_isDisposed)
+        {
+            ProcessPendingCallbacks();
+            Thread.Sleep(10); // Avoid busy-waiting
+        }
     }
 
     /// <summary>
@@ -609,7 +662,7 @@ public partial class Interpreter : IDisposable, IExprVisitor<object?>, IStmtVisi
             {
                 var result = Execute(export.Declaration);
                 if (result.IsAbrupt) return result;
-                
+
                 if (_currentModuleInstance != null)
                 {
                     _currentModuleInstance.DefaultExport = GetDeclaredValue(export.Declaration);
@@ -679,7 +732,7 @@ public partial class Interpreter : IDisposable, IExprVisitor<object?>, IStmtVisi
                 }
             }
         }
-        
+
         return ExecutionResult.Success();
     }
 

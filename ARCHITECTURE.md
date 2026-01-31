@@ -31,6 +31,7 @@ flowchart TB
 ```
 
 **Entry Point**: `Program.cs` orchestrates the pipeline based on command-line arguments:
+
 - No arguments → REPL mode
 - `<file>.ts` → Interpret file
 - `--compile <file>.ts` → Compile to .NET assembly
@@ -44,12 +45,14 @@ flowchart TB
 The lexer performs single-pass tokenization, converting source text into a stream of tokens.
 
 **Token Types** (58 total):
+
 - Keywords: `class`, `function`, `const`, `let`, `if`, `while`, `for`, `return`, etc.
 - Operators: `+`, `-`, `*`, `/`, `==`, `===`, `&&`, `||`, `?.`, `??`, etc.
 - Literals: `NUMBER`, `STRING`, `IDENTIFIER`
 - Template literals: `TEMPLATE_HEAD`, `TEMPLATE_MIDDLE`, `TEMPLATE_TAIL`
 
 **Example**:
+
 ```
 Input:  const x = 42;
 Output: [CONST, IDENTIFIER("x"), EQUAL, NUMBER(42), SEMICOLON, EOF]
@@ -60,12 +63,14 @@ Output: [CONST, IDENTIFIER("x"), EQUAL, NUMBER(42), SEMICOLON, EOF]
 A recursive descent parser that builds an Abstract Syntax Tree from tokens.
 
 **Key Features**:
+
 - Precedence climbing for expressions
 - Desugaring: `for` loops → `while` loops during parsing
 - Destructuring: `let [a, b] = arr` → temporary variable assignments
 - Arrow function detection with backtracking
 
 **Expression Precedence** (lowest to highest):
+
 ```
 Assignment → Ternary → NullishCoalescing → Or → And → BitwiseOr →
 BitwiseXor → BitwiseAnd → Equality → Comparison → Shift → Term →
@@ -77,6 +82,7 @@ Factor → Exponentiation → Unary → Call → Primary
 Immutable C# records representing the syntax tree.
 
 **Expressions** (`Expr`):
+
 ```
 Binary, Unary, Ternary, Logical          // Operators
 Variable, Get, GetIndex, Set, SetIndex   // Data access
@@ -86,6 +92,7 @@ This, Super, Assign, CompoundAssign      // Special
 ```
 
 **Statements** (`Stmt`):
+
 ```
 Var, Function, Class, Interface, TypeAlias  // Declarations
 If, While, DoWhile, ForOf, Switch           // Control flow
@@ -121,16 +128,16 @@ flowchart LR
 
 Abstract record hierarchy representing types:
 
-| Type | Description |
-|------|-------------|
-| `Primitive` | `string`, `number`, `boolean` |
-| `Function` | Parameter types, return type, required param count |
-| `Class` | Methods, static members, superclass chain |
-| `Interface` | Member shapes for structural typing |
-| `Instance` | Reference to a class type |
-| `Array` | Element type |
-| `Record` | Object literal shape `{key: type}` |
-| `Void`, `Any` | Special types |
+| Type          | Description                                        |
+| ------------- | -------------------------------------------------- |
+| `Primitive`   | `string`, `number`, `boolean`                      |
+| `Function`    | Parameter types, return type, required param count |
+| `Class`       | Methods, static members, superclass chain          |
+| `Interface`   | Member shapes for structural typing                |
+| `Instance`    | Reference to a class type                          |
+| `Array`       | Element type                                       |
+| `Record`      | Object literal shape `{key: type}`                 |
+| `Void`, `Any` | Special types                                      |
 
 ### TypeChecker (`TypeChecker.cs`)
 
@@ -140,10 +147,14 @@ Validates type correctness using two typing strategies:
 - **Structural typing** for interfaces: Shape must match (duck typing)
 
 ```typescript
-interface Walkable { walk(): void }
-class Dog { walk(): void { } }
+interface Walkable {
+  walk(): void;
+}
+class Dog {
+  walk(): void {}
+}
 
-let w: Walkable = new Dog();  // OK - Dog has walk() method
+let w: Walkable = new Dog(); // OK - Dog has walk() method
 ```
 
 ### TypeEnvironment (`TypeEnvironment.cs`)
@@ -184,24 +195,26 @@ Tree-walking interpreter that executes validated AST:
 ### RuntimeEnvironment (`RuntimeEnvironment.cs`)
 
 Scoped symbol table for runtime values:
+
 - `Define(name, value)` - Create variable binding
 - `Get(name)` - Retrieve value
 - `Assign(name, value)` - Update existing binding
 
 ### Runtime Objects
 
-| Class | Purpose |
-|-------|---------|
-| `SharpTSClass` | Class metadata, methods, static members |
-| `SharpTSInstance` | Object instance with field dictionary |
-| `SharpTSFunction` | Function with closure environment |
-| `SharpTSArray` | Array with built-in methods |
-| `SharpTSObject` | Object literal |
-| `SharpTSMath` | Math singleton |
+| Class             | Purpose                                 |
+| ----------------- | --------------------------------------- |
+| `SharpTSClass`    | Class metadata, methods, static members |
+| `SharpTSInstance` | Object instance with field dictionary   |
+| `SharpTSFunction` | Function with closure environment       |
+| `SharpTSArray`    | Array with built-in methods             |
+| `SharpTSObject`   | Object literal                          |
+| `SharpTSMath`     | Math singleton                          |
 
 ### Control Flow via Exceptions
 
 The interpreter uses exceptions for control flow unwinding:
+
 - `ReturnException` - Return from function
 - `BreakException` - Break from loop/switch
 - `ContinueException` - Continue to next iteration
@@ -236,40 +249,44 @@ flowchart TB
 
 **Key Phases:**
 
-| Phase | Description |
-|-------|-------------|
-| 0 | Extract @Namespace directive for .NET namespace |
-| 1 | Emit runtime support types (RuntimeTypes, TSFunction) |
-| 2 | Analyze closures to identify captured variables |
-| 3 | Create $Program container type |
-| 4 | Define all classes, functions, enums, namespaces |
+| Phase   | Description                                               |
+| ------- | --------------------------------------------------------- |
+| 0       | Extract @Namespace directive for .NET namespace           |
+| 1       | Emit runtime support types (RuntimeTypes, TSFunction)     |
+| 2       | Analyze closures to identify captured variables           |
+| 3       | Create $Program container type                            |
+| 4       | Define all classes, functions, enums, namespaces          |
 | 4.4-4.6 | Initialize captures, typed interop, type emitter registry |
-| 5 | Collect and define arrow functions |
-| 5.5-5.6 | Define class expression types and method signatures |
-| 6 | Emit arrow function bodies |
+| 5       | Collect and define arrow functions                        |
+| 5.5-5.6 | Define class expression types and method signatures       |
+| 6       | Emit arrow function bodies                                |
 | 6.3-6.7 | Define class methods, emit async/generator state machines |
-| 7 | Emit all method bodies |
-| 7.5 | Emit class expression bodies |
-| 8 | Emit Main() entry point |
-| 9 | Finalize all types, produce assembly |
+| 7       | Emit all method bodies                                    |
+| 7.5     | Emit class expression bodies                              |
+| 8       | Emit Main() entry point                                   |
+| 9       | Finalize all types, produce assembly                      |
 
 ### Key Components
 
 **ILCompiler** (`Compilation/ILCompiler.cs`)
+
 - Main orchestrator running the compilation phases
 - Manages TypeBuilder instances
 - Coordinates closure handling and state machine generation
 
 **ILEmitter** (`Compilation/ILEmitter.cs`)
+
 - Emits IL instructions for statements and expressions
 - Handles special cases: `console.log`, `Math.*`, array methods
 - Manages boxing/unboxing for value types
 
 **ClosureAnalyzer** (`Compilation/ClosureAnalyzer.cs`)
+
 - Walks AST to find captured variables
 - Determines which arrows need display classes
 
 **RuntimeTypes** (`Compilation/RuntimeTypes.cs`)
+
 - Emits helper types into the assembly
 - `TSFunction`: Wraps method references
 - `RuntimeTypes`: 50+ helper methods for TypeScript semantics
@@ -277,11 +294,13 @@ flowchart TB
 ### Closure Compilation
 
 **Non-capturing arrow** → Static method on `$Program`:
+
 ```csharp
 static object? <>Arrow_0(object? x) { return x + 1; }
 ```
 
 **Capturing arrow** → Display class with captured fields:
+
 ```csharp
 class <>c__DisplayClass0 {
     public object? capturedVar;
@@ -296,12 +315,14 @@ class <>c__DisplayClass0 {
 ### 1. Two-Environment Separation
 
 Types and values never mix:
+
 - `TypeEnvironment` + `TypeInfo` = compile-time
 - `RuntimeEnvironment` + `object?` = runtime
 
 ### 2. Discriminated Unions
 
 AST nodes use C# records with pattern matching:
+
 ```csharp
 var result = expr switch {
     Expr.Binary b => HandleBinary(b),
@@ -314,6 +335,7 @@ var result = expr switch {
 ### 3. Visitor-Style Traversal
 
 All phases use switch-based visitors on AST nodes:
+
 - `TypeChecker.Check()` / `CheckExpr()`
 - `Interpreter.Execute()` / `Evaluate()`
 - `ILEmitter.EmitStatement()` / `EmitExpression()`
@@ -324,7 +346,8 @@ Return, break, continue, and yield use exceptions for stack unwinding rather tha
 
 ### 5. ISharpTSPropertyAccessor Interface
 
-Unified property access abstraction implemented by `SharpTSObject` and `SharpTSInstance`:
+Unified property access abstraction implemented by `SharpTSObject`, `SharpTSInstance`, and `SharpTSEventEmitter`:
+
 ```csharp
 public interface ISharpTSPropertyAccessor {
     object? GetProperty(string name);
@@ -334,11 +357,12 @@ public interface ISharpTSPropertyAccessor {
 }
 ```
 
-This reduces type-specific pattern matching in the interpreter and enables polymorphic property access.
+This reduces type-specific pattern matching in the interpreter and enables polymorphic property access. The `SharpTSEventEmitter` implementation allows HTTP server instances (which extend EventEmitter) to be accessed uniformly.
 
 ### 6. State Machine Pattern
 
 Async functions and generators compile to state machines:
+
 - State stored in generated display classes
 - `MoveNext()` method advances through suspension points
 - Separate analyzers identify yield/await points and hoisted variables
@@ -346,6 +370,7 @@ Async functions and generators compile to state machines:
 ### 7. Type Emitter Registry
 
 Pluggable IL emission for type-specific operations:
+
 - Registered emitters for String, Array, Date, Map, Set, RegExp, etc.
 - Allows specialized IL generation without monolithic switch statements
 - Static emitters for type constructors and static methods
@@ -356,19 +381,19 @@ Pluggable IL emission for type-specific operations:
 
 ### Core Pipeline
 
-| File | Purpose |
-|------|---------|
-| `Program.cs` | Entry point, orchestrates pipeline |
-| `Parsing/Lexer.cs` | Tokenization |
-| `Parsing/Token.cs` | Token types and representation |
-| `Parsing/Parser.cs` | Recursive descent parser (10 partial files) |
-| `Parsing/AST.cs` | AST node definitions |
-| `TypeSystem/TypeChecker.cs` | Static type analysis (20 partial files) |
-| `TypeSystem/TypeInfo.cs` | Type representations |
-| `TypeSystem/TypeEnvironment.cs` | Compile-time symbol table |
-| `TypeSystem/TypeMap.cs` | Type mapping utilities |
-| `Execution/Interpreter.cs` | Tree-walking execution (see partial classes below) |
-| `Runtime/RuntimeEnvironment.cs` | Runtime symbol table |
+| File                            | Purpose                                            |
+| ------------------------------- | -------------------------------------------------- |
+| `Program.cs`                    | Entry point, orchestrates pipeline                 |
+| `Parsing/Lexer.cs`              | Tokenization                                       |
+| `Parsing/Token.cs`              | Token types and representation                     |
+| `Parsing/Parser.cs`             | Recursive descent parser (10 partial files)        |
+| `Parsing/AST.cs`                | AST node definitions                               |
+| `TypeSystem/TypeChecker.cs`     | Static type analysis (20 partial files)            |
+| `TypeSystem/TypeInfo.cs`        | Type representations                               |
+| `TypeSystem/TypeEnvironment.cs` | Compile-time symbol table                          |
+| `TypeSystem/TypeMap.cs`         | Type mapping utilities                             |
+| `Execution/Interpreter.cs`      | Tree-walking execution (see partial classes below) |
+| `Runtime/RuntimeEnvironment.cs` | Runtime symbol table                               |
 
 ### Runtime Objects (31 files)
 
@@ -415,6 +440,12 @@ Pluggable IL emission for type-specific operations:
 | `SharpTSDate.cs` | Date object |
 | `SharpTSRegExp.cs` | Regular expressions |
 | `SharpTSSymbol.cs` | Symbol primitive |
+
+**Events:**
+| File | Purpose |
+|------|---------|
+| `SharpTSEventEmitter.cs` | Node.js-compatible event emitter (implements ISharpTSPropertyAccessor) |
+| `SharpTSEventEmitterConstructor.cs` | EventEmitter constructor for `new EventEmitter()` |
 
 **Other:**
 | File | Purpose |
@@ -469,33 +500,61 @@ Pluggable IL emission for type-specific operations:
 
 ### Control Flow (5 files)
 
-| File | Purpose |
-|------|---------|
-| `ReturnException.cs` | Return statement unwinding |
-| `BreakException.cs` | Break statement unwinding |
-| `ContinueException.cs` | Continue statement unwinding |
-| `ThrowException.cs` | User-thrown exceptions |
-| `YieldException.cs` | Yield expression control flow |
+| File                   | Purpose                       |
+| ---------------------- | ----------------------------- |
+| `ReturnException.cs`   | Return statement unwinding    |
+| `BreakException.cs`    | Break statement unwinding     |
+| `ContinueException.cs` | Continue statement unwinding  |
+| `ThrowException.cs`    | User-thrown exceptions        |
+| `YieldException.cs`    | Yield expression control flow |
 
 ### IL Compilation (140+ files)
 
 The compilation directory has grown substantially. Key organizational patterns:
 
-| Component | Files | Purpose |
-|-----------|-------|---------|
-| `ILCompiler.*.cs` | 13 | Main orchestrator (partial classes for Classes, Async, Generators, etc.) |
-| `ILEmitter.*.cs` | 12+ | IL emission (Calls, Expressions, Helpers, Modules, etc.) |
-| `RuntimeEmitter.*.cs` | 31 | Runtime code emission (Arrays, Promises, Maps, etc.) |
-| `RuntimeTypes.*.cs` | 16 | Runtime type emission (Arrays, Operators, Promise, etc.) |
-| `*MoveNextEmitter.cs` | 20 | State machine emission for async/generators |
-| `*StateAnalyzer.cs` | 3 | State analysis for async/generator transforms |
+| Component             | Files | Purpose                                                                  |
+| --------------------- | ----- | ------------------------------------------------------------------------ |
+| `ILCompiler.*.cs`     | 13    | Main orchestrator (partial classes for Classes, Async, Generators, etc.) |
+| `ILEmitter.*.cs`      | 12+   | IL emission (Calls, Expressions, Helpers, Modules, etc.)                 |
+| `RuntimeEmitter.*.cs` | 31    | Runtime code emission (Arrays, Promises, Maps, etc.)                     |
+| `RuntimeTypes.*.cs`   | 16    | Runtime type emission (Arrays, Operators, Promise, etc.)                 |
+| `*MoveNextEmitter.cs` | 20    | State machine emission for async/generators                              |
+| `*StateAnalyzer.cs`   | 3     | State analysis for async/generator transforms                            |
 
 ### Module System
 
-| File | Purpose |
-|------|---------|
-| `Modules/ModuleResolver.cs` | Module path resolution |
-| `Modules/ParsedModule.cs` | Parsed module representation |
+| File                        | Purpose                      |
+| --------------------------- | ---------------------------- |
+| `Modules/ModuleResolver.cs` | Module path resolution       |
+| `Modules/ParsedModule.cs`   | Parsed module representation |
+
+### Built-in Module Interpreters
+
+Located in `Runtime/BuiltIns/Modules/Interpreter/`:
+
+| File                         | Purpose                                               |
+| ---------------------------- | ----------------------------------------------------- |
+| `BuiltInModuleValues.cs`     | Registry of module export factories                   |
+| `FsModuleInterpreter.cs`     | File system operations                                |
+| `PathModuleInterpreter.cs`   | Path manipulation                                     |
+| `HttpModuleInterpreter.cs`   | HTTP server (createServer, Server, Request, Response) |
+| `EventsModuleInterpreter.cs` | EventEmitter constructor                              |
+| `TimersModuleInterpreter.cs` | setTimeout, setInterval, etc.                         |
+| `UrlModuleInterpreter.cs`    | URL parsing                                           |
+| `CryptoModuleInterpreter.cs` | Cryptographic operations                              |
+| ...                          | (18 total module interpreters)                        |
+
+### Built-in Module IL Emitters
+
+Located in `Compilation/Emitters/Modules/`:
+
+| File                              | Purpose                                  |
+| --------------------------------- | ---------------------------------------- |
+| `BuiltInModuleEmitterRegistry.cs` | Registry for module IL emitters          |
+| `IBuiltInModuleEmitter.cs`        | Interface for module emitters            |
+| `FsModuleEmitter.cs`              | File system IL emission                  |
+| `HttpModuleEmitter.cs`            | HTTP stub (throws NotSupportedException) |
+| ...                               | (20 total module emitters)               |
 
 ### Tooling & IDE Integration
 
@@ -525,11 +584,13 @@ The compilation directory has grown substantially. Key organizational patterns:
 Large classes are split across multiple files for maintainability:
 
 **Parser** (`Parsing/`) - 10 files:
+
 - `Parser.cs`, `Parser.Classes.cs`, `Parser.Declarations.cs`, `Parser.Decorators.cs`
 - `Parser.Destructuring.cs`, `Parser.Expressions.cs`, `Parser.Functions.cs`
 - `Parser.Modules.cs`, `Parser.Namespaces.cs`, `Parser.Statements.cs`, `Parser.Types.cs`
 
 **TypeChecker** (`TypeSystem/`) - 20 files:
+
 - Core: `TypeChecker.cs`, `TypeChecker.Expressions.cs`, `TypeChecker.Operators.cs`
 - Properties: `TypeChecker.Properties.cs`, `TypeChecker.Properties.Index.cs`, `TypeChecker.Properties.New.cs`
 - Statements: `TypeChecker.Statements.cs`, `TypeChecker.Statements.Classes.cs`, `TypeChecker.Statements.ControlFlow.cs`
@@ -539,12 +600,14 @@ Large classes are split across multiple files for maintainability:
 - Other: `TypeChecker.TypeParsing.cs`, `TypeChecker.Validation.cs`
 
 **Interpreter** (`Execution/`) - 11 files:
+
 - `Interpreter.cs`, `Interpreter.Statements.cs`, `Interpreter.Expressions.cs`
 - `Interpreter.Properties.cs`, `Interpreter.Calls.cs`, `Interpreter.Operators.cs`
 - `Interpreter.Async.cs`, `Interpreter.Decorators.cs`, `Interpreter.Helpers.cs`
 - `Interpreter.Namespaces.cs`, `ExecutionResult.cs`
 
 **ILEmitter** (`Compilation/`) - 12+ files:
+
 - `ILEmitter.cs`, `ILEmitter.Statements.cs`, `ILEmitter.Expressions.cs`
 - `ILEmitter.Properties.cs`, `ILEmitter.Calls.cs`, `ILEmitter.Operators.cs`
 - `ILEmitter.Helpers.cs`, `ILEmitter.Modules.cs`, `ILEmitter.Namespaces.cs`
@@ -566,6 +629,7 @@ SharpTS supports async/await with a full Promise implementation.
 ### Compilation
 
 Async functions compile to state machines:
+
 - **AsyncStateAnalyzer** - Analyzes suspension points (await expressions)
 - **AsyncMoveNextEmitter** - Generates `MoveNext()` method for state machine
 - State captured in display classes similar to closures
@@ -587,6 +651,7 @@ Full support for sync generators (`function*`) and async generators (`async func
 ### Compilation
 
 Generators compile to state machines similar to async functions:
+
 - **GeneratorStateAnalyzer** - Identifies yield points and hoisted variables
 - **GeneratorMoveNextEmitter** - State machine implementation
 - **AsyncGeneratorMoveNextEmitter** - Combined async + generator state machine
@@ -597,12 +662,12 @@ Generators compile to state machines similar to async functions:
 
 ES6+ collection types with full method support.
 
-| Type | Runtime Class | Built-ins |
-|------|---------------|-----------|
-| `Map<K,V>` | `SharpTSMap` | `MapBuiltIns` |
-| `Set<T>` | `SharpTSSet` | `SetBuiltIns` |
+| Type           | Runtime Class    | Built-ins         |
+| -------------- | ---------------- | ----------------- |
+| `Map<K,V>`     | `SharpTSMap`     | `MapBuiltIns`     |
+| `Set<T>`       | `SharpTSSet`     | `SetBuiltIns`     |
 | `WeakMap<K,V>` | `SharpTSWeakMap` | `WeakMapBuiltIns` |
-| `WeakSet<T>` | `SharpTSWeakSet` | `WeakSetBuiltIns` |
+| `WeakSet<T>`   | `SharpTSWeakSet` | `WeakSetBuiltIns` |
 
 All collections support iteration via `for...of` and destructuring.
 
@@ -611,22 +676,27 @@ All collections support iteration via `for...of` and destructuring.
 ## Modern JavaScript Types
 
 ### BigInt
+
 - **SharpTSBigInt** - Arbitrary precision integer arithmetic
 - Supports all arithmetic and comparison operators
 
 ### Date
+
 - **SharpTSDate** - Full Date object implementation
 - **DateBuiltIns** - Constructor and instance methods
 
 ### RegExp
+
 - **SharpTSRegExp** - Regular expression support
 - **RegExpBuiltIns** - `test()`, `exec()`, `match()`, etc.
 
 ### Symbol
+
 - **SharpTSSymbol** - Symbol primitive for unique property keys
 - **SymbolBuiltIns** - `Symbol.for()`, `Symbol.keyFor()`, well-known symbols
 
 ### JSON
+
 - **JSONBuiltIns** - `JSON.parse()` and `JSON.stringify()`
 
 ---
@@ -636,6 +706,7 @@ All collections support iteration via `for...of` and destructuring.
 ### Namespaces
 
 TypeScript namespace support for organizing code:
+
 - **SharpTSNamespace** - Runtime namespace object
 - **ModuleInstance** - Module/namespace instance container
 - Namespaces can be nested and merged
@@ -643,7 +714,124 @@ TypeScript namespace support for organizing code:
 ### Decorators
 
 Stage 3 decorator support:
+
 - **SharpTSDecoratorContext** - Decorator metadata context
 - **ReflectBuiltIns** - Reflect API for metadata
 - **ReflectMetadataStore** - Runtime metadata storage
 - Supports class, method, accessor, and field decorators
+
+---
+
+## HTTP Server (Interpreter Only)
+
+SharpTS supports Node.js-compatible HTTP servers in interpreted mode.
+
+### Architecture
+
+```mermaid
+flowchart TB
+    subgraph Interpreter
+        EL["Event Loop (Ref/Unref)"]
+        VT["Virtual Timers"]
+        CB["Callback Queue"]
+    end
+
+    subgraph HttpModule
+        HS["HttpServerInstance"]
+        IM["HttpIncomingMessage"]
+        SR["HttpServerResponse"]
+    end
+
+    subgraph .NET
+        HL["HttpListener"]
+        BG["Background Accept Loop"]
+    end
+
+    HS --> HL
+    BG --> CB
+    CB --> VT
+    VT --> EL
+```
+
+### Components
+
+| Component               | Purpose                                                   |
+| ----------------------- | --------------------------------------------------------- |
+| `HttpModuleInterpreter` | Module exports: `createServer`, `METHODS`, `STATUS_CODES` |
+| `HttpServerInstance`    | Server object extending `SharpTSEventEmitter`             |
+| `HttpIncomingMessage`   | Request wrapper (method, url, headers)                    |
+| `HttpServerResponse`    | Response wrapper (statusCode, setHeader, write, end)      |
+
+### Event Loop Integration
+
+The interpreter maintains an active handle count for long-running operations:
+
+```csharp
+// In Interpreter.cs
+internal void Ref()    // Increment active handles
+internal void Unref()  // Decrement active handles
+public void RunEventLoop()  // Process callbacks while handles > 0
+```
+
+**Lifecycle:**
+
+1. `server.listen()` calls `interpreter.Ref()` - keeps event loop alive
+2. Background thread accepts connections via `HttpListener`
+3. Each request queues callback via `interpreter.ScheduleTimer(0, ...)`
+4. Event loop processes queued callbacks on main thread
+5. `server.close()` calls `interpreter.Unref()` - allows exit when count reaches 0
+
+### Usage
+
+```typescript
+import http from "http";
+
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ message: "Hello!" }));
+});
+
+server.listen(3000, () => {
+  console.log("Server running on port 3000");
+});
+```
+
+### Limitations
+
+- **Interpreter only** - Compilation throws `NotSupportedException`
+- No HTTPS support yet
+- No streaming request bodies (full body buffering)
+- Single-threaded callback execution (Node.js compatible)
+
+---
+
+## SharpTS.Node Library
+
+Standalone .NET library providing Node.js-compatible primitives.
+
+### Projects
+
+| Project              | Purpose                                |
+| -------------------- | -------------------------------------- |
+| `SharpTS.Node`       | Core library (EventLoop, Events, Http) |
+| `SharpTS.Node.Tests` | xUnit tests for the library            |
+
+### Key Classes
+
+**Event Loop:**
+
+- `NodeEventLoop` - BlockingCollection-based event loop with Ref/Unref
+- `NodeSynchronizationContext` - Routes async continuations to event loop
+
+**Events:**
+
+- `EventEmitter` - Node.js-compatible event emitter
+
+**HTTP:**
+
+- `Http.CreateServer()` - Factory for HTTP servers
+- `Server` - HttpListener-based server with multi-accept loops
+- `IncomingMessage` - Request wrapper
+- `ServerResponse` - Response wrapper
+
+This library can be used independently of the SharpTS interpreter for .NET applications needing Node.js-style APIs

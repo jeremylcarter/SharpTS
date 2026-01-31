@@ -9,21 +9,25 @@ SharpTS is a TypeScript interpreter and compiler implemented in C# using .NET 10
 ## Build and Run Commands
 
 ### Build the project
+
 ```bash
 dotnet build
 ```
 
 ### Run REPL mode
+
 ```bash
 dotnet run
 ```
 
 ### Execute a TypeScript file (interpreted)
+
 ```bash
 dotnet run -- <filename>.ts
 ```
 
 ### Compile to .NET IL (ahead-of-time)
+
 ```bash
 dotnet run -- --compile <filename>.ts           # Outputs <filename>.dll
 dotnet run -- --compile <filename>.ts -o out.dll  # Custom output path
@@ -31,12 +35,15 @@ dotnet run -- --compile <filename>.ts --pack    # Generate NuGet package
 ```
 
 ### Run compiled output
+
 ```bash
 dotnet <filename>.dll
 ```
 
 ### Run tests
+
 The project uses xUnit tests in the `SharpTS.Tests/` directory:
+
 ```bash
 dotnet test
 ```
@@ -112,6 +119,19 @@ SharpTS/
 │   ├── PackageValidator.cs     # Pre-packaging validation
 │   └── NuGetPublisher.cs       # Push to NuGet feeds
 │
+├── SharpTS.Node/               # HTTP server library (namespace: SharpTS.Node)
+│   ├── EventLoop/              # Event loop infrastructure
+│   │   ├── NodeEventLoop.cs
+│   │   └── NodeSynchronizationContext.cs
+│   ├── Events/                 # EventEmitter implementation
+│   │   └── EventEmitter.cs
+│   └── Http/                   # HTTP server implementation
+│       ├── Http.cs             # createServer factory
+│       ├── Server.cs           # HTTP server using HttpListener
+│       ├── IncomingMessage.cs  # Request wrapper
+│       └── ServerResponse.cs   # Response wrapper
+│
+├── SharpTS.Node.Tests/         # Tests for SharpTS.Node
 ├── SharpTS.Tests/              # xUnit test project
 ├── Program.cs                  # Entry point
 └── SharpTS.csproj
@@ -152,11 +172,13 @@ SharpTS/
 ### Critical Architecture Notes
 
 **Two-Environment System:**
+
 - `TypeEnvironment`: Tracks types during static analysis
 - `RuntimeEnvironment`: Tracks values during execution
 - These are completely separate - never mix them
 
 **Type System Design:**
+
 - Supports **structural typing** for interfaces (duck typing)
 - Supports **nominal typing** for classes (inheritance-based)
 - Type checking happens at compile-time; runtime uses dynamic object model
@@ -164,6 +186,7 @@ SharpTS/
 - Runtime objects (`SharpTSInstance`, etc.) are independent of `TypeInfo`
 
 **Control Flow via Exceptions:** (`Runtime/Exceptions/`)
+
 - `ReturnException.cs`: Unwinding the call stack on `return` statements
 - `BreakException.cs`: Breaking out of loops and switch statements
 - `ContinueException.cs`: Continuing to next loop iteration
@@ -171,6 +194,7 @@ SharpTS/
 - This is intentional - exceptions as control flow mechanism
 
 **Entry Point:**
+
 - `Program.cs` orchestrates the pipeline: Lex → Parse → TypeCheck → (Interpret OR Compile)
 - Errors in type checking prevent execution or compilation from running
 - The `--compile` flag switches from interpretation to IL compilation
@@ -187,22 +211,26 @@ SharpTS/
 - **Error Handling:** `try/catch/finally`, `throw`
 - **Operators:** Nullish coalescing (`??`), optional chaining (`?.`), ternary (`?:`), template literals
 - **Built-ins:** `console.log`, `Math` object (constants and methods), string methods
+- **Node.js Modules:** `fs`, `path`, `os`, `url`, `http` (interpreter only), `crypto`, `events`, `timers`, etc.
 
 ## Development Patterns
 
 ### AST Node Pattern
+
 - All AST nodes are discriminated unions using C# records
 - Expression nodes inherit from `Expr`
 - Statement nodes inherit from `Stmt`
 - Use pattern matching (`switch` expressions) to traverse
 
 ### Visitor-Style Traversal
+
 - `TypeChecker.Check()` and `TypeChecker.CheckExpr()` for static analysis
 - `Interpreter.Execute()` and `Interpreter.Evaluate()` for runtime
 - `ILEmitter.EmitStatement()` and `ILEmitter.EmitExpression()` for IL compilation
 - All use switch pattern matching on AST node types
 
 ### Error Handling
+
 - Type errors throw exceptions with "Type Error:" prefix
 - Runtime errors throw exceptions with "Runtime Error:" prefix
 - Main loop in `Program.cs` catches and displays errors
@@ -222,3 +250,6 @@ SharpTS/
 - **Method Lookup:** Searches up the inheritance chain for methods (see `TypeSystem/TypeChecker.cs` CheckGet and `Execution/Interpreter.Properties.cs` EvaluateGet)
 - **Closure Compilation:** Arrow functions use display classes for captured variables; non-capturing arrows compile to static methods
 - **IL Compilation Phases:** ILCompiler runs in 9 phases - emit runtime types, analyze closures, define classes/functions, collect arrow functions, emit arrow bodies, emit class methods, emit entry point, finalize types
+- **Event Loop:** Interpreter has `Ref()`/`Unref()` for active handle counting and `RunEventLoop()` for keeping servers alive
+- **HTTP Module:** Interpreter-only; uses `HttpListener` with virtual timer integration for callback dispatch
+- **SharpTSEventEmitter:** Implements `ISharpTSPropertyAccessor` for unified property access; base class for HTTP server

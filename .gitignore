@@ -96,5 +96,10 @@ vscode-sharpts/.eslintcache
 vscode-sharpts/.vscode-test/
 *.vsix
 
+# Examples Node.js
+Examples/node_modules/
+Examples/dist/
+Examples/package-lock.json
+
 # Reference examples
 ReferenceExamples/
