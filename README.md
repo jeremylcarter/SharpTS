@@ -162,19 +162,19 @@ Hello, World!
 ```typescript
 // animals.ts
 class Animal {
-    name: string;
-    constructor(name: string) {
-        this.name = name;
-    }
-    speak(): string {
-        return this.name + " makes a sound";
-    }
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+  speak(): string {
+    return this.name + " makes a sound";
+  }
 }
 
 class Dog extends Animal {
-    speak(): string {
-        return this.name + " barks!";
-    }
+  speak(): string {
+    return this.name + " barks!";
+  }
 }
 
 let dog = new Dog("Rex");
@@ -196,9 +196,9 @@ let doubled = numbers.map((n: number): number => n * 2);
 let evens = numbers.filter((n: number): boolean => n % 2 == 0);
 let sum = numbers.reduce((acc: number, n: number): number => acc + n, 0);
 
-console.log(doubled);  // [2, 4, 6, 8, 10]
-console.log(evens);    // [2, 4]
-console.log(sum);      // 15
+console.log(doubled); // [2, 4, 6, 8, 10]
+console.log(evens); // [2, 4]
+console.log(sum); // 15
 ```
 
 ### Compiled Execution
@@ -220,9 +220,9 @@ $ dotnet functional.dll
 // Use BCL types directly in TypeScript
 @DotNetType("System.Text.StringBuilder")
 declare class StringBuilder {
-    constructor();
-    append(value: string): StringBuilder;
-    toString(): string;
+  constructor();
+  append(value: string): StringBuilder;
+  toString(): string;
 }
 
 let sb = new StringBuilder();

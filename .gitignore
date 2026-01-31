@@ -95,3 +95,6 @@ vscode-sharpts/dist/
 vscode-sharpts/.eslintcache
 vscode-sharpts/.vscode-test/
 *.vsix
+
+# Reference examples
+ReferenceExamples/
