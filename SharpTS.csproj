@@ -64,8 +64,4 @@
     <PackageReference Include="ZstdSharp.Port" Version="0.8.1" />
   </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="SharpTS.Node\SharpTS.Node.csproj" />
-  </ItemGroup>
-
 </Project>
