@@ -1,44 +1,485 @@
 # SharpTS Multi-Threading Architecture for Event Loop & HTTP
 
-This document captures the analysis, design decisions, and implementation plan for adding proper multi-threading support to SharpTS's event loop, timers, and HTTP server.
+This document captures the analysis, design decisions, and implementation plan for adding proper event loop support to SharpTS's timers and HTTP server.
 
 **Date:** 2026-01-31  
-**Status:** Design Phase
+**Status:** Design Phase  
+**Decision:** Single-threaded event loop first (Node.js compatible), using SharpEventLoop pattern
 
 ---
 
 ## Table of Contents
 
 1. [Executive Summary](#executive-summary)
-2. [Current State Analysis](#current-state-analysis)
-3. [The Core Problems](#the-core-problems)
-4. [Threading Layers](#threading-layers)
-5. [The Interpreter Constraint](#the-interpreter-constraint)
-6. [Key Insight: Shared State is Rare](#key-insight-shared-state-is-rare)
-7. [Proposed Solution: Auto-Lock Captured Variables](#proposed-solution-auto-lock-captured-variables)
-8. [Implementation Options](#implementation-options)
-9. [SynchronizationContext Design](#synchronizationcontext-design)
-10. [Efficient Waiting (No Polling)](#efficient-waiting-no-polling)
-11. [Architecture Comparison](#architecture-comparison)
-12. [Migration Path](#migration-path)
-13. [Reference Patterns](#reference-patterns)
-14. [Open Questions](#open-questions)
+2. [Decision: Single-Threaded First](#decision-single-threaded-first)
+3. [Recommended Pattern: SharpEventLoop](#recommended-pattern-sharpeventloop)
+4. [Reference Examples Comparison](#reference-examples-comparison)
+5. [Detailed Comparison: SharpEventLoop vs eLoop](#detailed-comparison-sharpeventloop-vs-eloop)
+6. [Current State Analysis](#current-state-analysis)
+7. [The Core Problems](#the-core-problems)
+8. [Threading Layers](#threading-layers)
+9. [The Interpreter Constraint](#the-interpreter-constraint)
+10. [Key Insight: Shared State is Rare](#key-insight-shared-state-is-rare)
+11. [Proposed Solution: Auto-Lock Captured Variables](#proposed-solution-auto-lock-captured-variables)
+12. [Implementation Options](#implementation-options)
+13. [SynchronizationContext Design](#synchronizationcontext-design)
+14. [Efficient Waiting (No Polling)](#efficient-waiting-no-polling)
+15. [Architecture Comparison](#architecture-comparison)
+16. [Migration Path](#migration-path)
+17. [Reference Patterns](#reference-patterns)
+18. [Future: Partitioned Event Loops](#future-partitioned-event-loops)
+19. [Open Questions](#open-questions)
 
 ---
 
 ## Executive Summary
 
-SharpTS needs an efficient, multi-core-capable event loop for long-running HTTP servers (running for weeks). The current implementation has two problems:
+SharpTS needs an efficient event loop for long-running HTTP servers (running for weeks). The current implementation has two problems:
 
 1. **Inefficient polling** - `Thread.Sleep(10)` wastes CPU cycles
 2. **Missing async context** - `await` continuations can run on wrong thread
 
-The proposed solution:
+### Decision
 
-- **Multi-threaded I/O and callbacks** where safe
-- **Automatic locking** for captured variables (rare case)
-- **Efficient waiting** via `BlockingCollection` instead of polling
-- **Proper SynchronizationContext** for async continuations
+**Single-threaded event loop first, matching Node.js semantics.** Multi-threading can be added as an optimization later when the foundation is mature.
+
+### Recommended Pattern
+
+**Use SharpEventLoop** (MPL 2.0 licensed) as the model - just ~120 lines of code that solves both problems:
+
+- `BlockingCollection` + `GetConsumingEnumerable()` for efficient waiting
+- `SynchronizationContext` for proper async continuation routing
+
+---
+
+## Decision: Single-Threaded First
+
+After analyzing multi-threading approaches, we decided to **prioritize Node.js compatibility over parallel performance**.
+
+### Rationale
+
+1. **Hide complexity from users** - SharpTS should work like Node.js, no threading surprises
+2. **Singleton services are safe by default** - No race conditions for NestJS-style patterns
+3. **Simpler implementation** - No locking infrastructure needed
+4. **Correctness before speed** - Easy to validate behavior matches Node.js
+5. **Future-proof** - Multi-threading can be added as opt-in optimization later
+
+### What This Means
+
+| Aspect             | Behavior                                       |
+| ------------------ | ---------------------------------------------- |
+| I/O operations     | Multi-threaded (HttpListener, async file I/O)  |
+| User callbacks     | Single-threaded (all run on event loop thread) |
+| Shared state       | Safe by default (no race conditions)           |
+| Singleton services | Work exactly like Node.js                      |
+| Performance        | Good for I/O-bound workloads (most servers)    |
+
+### Deferred for Future
+
+- Thread-safe RuntimeEnvironment
+- Per-variable locking analysis
+- Parallel callback execution
+- Multi-threading as opt-in mode
+
+---
+
+## Recommended Pattern: SharpEventLoop
+
+After comparing all reference examples, **SharpEventLoop** is the recommended pattern.
+
+### Source
+
+```
+Location: ReferenceExamples/SharpEventLoop/
+License: Mozilla Public License 2.0
+Size: ~120 lines (just 2 classes!)
+```
+
+### Why SharpEventLoop
+
+| Criteria                   | SharpEventLoop | eLoop              | EventLoopSchedulerSlim |
+| -------------------------- | -------------- | ------------------ | ---------------------- |
+| Solves polling problem     | ✅ Yes         | ✅ Yes             | ❌ No                  |
+| Has SynchronizationContext | ✅ Yes         | ⚠️ Optional        | ❌ No                  |
+| Tracks active tasks        | ✅ Yes         | ✅ Yes             | ❌ No                  |
+| Simple to understand       | ✅ ~120 lines  | ❌ 2000+ lines     | ✅ ~100 lines          |
+| Node.js-style API          | ✅ Exactly     | ⚠️ Different       | ❌ Different           |
+| Designed for our use case  | ✅ Yes         | ⚠️ Over-engineered | ❌ No async context    |
+
+### Core Pattern
+
+```csharp
+// From SharpEventLoop - the key elements:
+
+internal sealed class EventLoopInternal : IDisposable
+{
+    // Efficient queue with blocking wait
+    private readonly BlockingCollection<Action> _actions;
+
+    // Track active async operations (like Ref/Unref)
+    private int _numberOfConcurrentTasks;
+
+    public void Enter()
+    {
+        // Set up async context - THIS IS THE KEY
+        var currentContext = new EventLoopSynchronizationContext(Enqueue);
+        SynchronizationContext.SetSynchronizationContext(currentContext);
+
+        // Efficient loop - blocks until work available
+        foreach (var action in _actions.GetConsumingEnumerable())
+        {
+            action();  // Execute on this thread
+        }
+    }
+
+    private bool Enqueue(Action action)
+    {
+        _actions.Add(action);  // Thread-safe enqueue
+        return true;
+    }
+}
+
+// SynchronizationContext routes async continuations back to the loop
+internal sealed class EventLoopSynchronizationContext : SynchronizationContext
+{
+    private readonly Func<Action, bool> _enqueue;
+
+    public override void Post(SendOrPostCallback callback, object state)
+    {
+        _enqueue(() => callback(state));  // Route to event loop
+    }
+}
+```
+
+### License: MPL 2.0
+
+Mozilla Public License 2.0 allows us to:
+
+- ✅ Use the code
+- ✅ Modify the code
+- ✅ Include in our project
+- ⚠️ Must keep MPL license for modified files (file-level copyleft)
+
+**Options:**
+
+1. **Copy and modify** - Keep MPL header on the copied files
+2. **Reimplement pattern** - Use as inspiration, write our own (no license requirement)
+
+Given it's only ~120 lines and we'll integrate with our timer system, **reimplementing the pattern** is probably cleaner.
+
+### Integration with SharpTS
+
+We'll adapt SharpEventLoop's pattern to work with our existing infrastructure:
+
+```csharp
+// In Interpreter.cs - adapted from SharpEventLoop pattern
+
+private readonly BlockingCollection<Action> _callbackQueue = new();
+private InterpreterSynchronizationContext? _syncContext;
+
+public void RunEventLoop()
+{
+    _syncContext = new InterpreterSynchronizationContext(EnqueueCallback);
+    var previous = SynchronizationContext.Current;
+    SynchronizationContext.SetSynchronizationContext(_syncContext);
+
+    try
+    {
+        while (HasActiveHandles && !_isDisposed)
+        {
+            // Wait for callback OR timer, whichever first
+            var timeout = GetNextTimerTimeout();
+
+            if (_callbackQueue.TryTake(out var action, timeout))
+            {
+                action();
+            }
+
+            ProcessDueTimers();
+        }
+    }
+    finally
+    {
+        SynchronizationContext.SetSynchronizationContext(previous);
+    }
+}
+
+private void EnqueueCallback(Action action)
+{
+    if (!_callbackQueue.IsAddingCompleted)
+        _callbackQueue.Add(action);
+}
+```
+
+**This gives us:**
+
+- ✅ Efficient waiting (no polling)
+- ✅ Proper async context (await works correctly)
+- ✅ Single-threaded semantics (Node.js compatible)
+- ✅ Timer support (integrated with our existing system)
+- ✅ Minimal code change to Interpreter
+
+---
+
+## Reference Examples Comparison
+
+### 1. SharpEventLoop ⭐ RECOMMENDED
+
+```
+Location: ReferenceExamples/SharpEventLoop/
+License: MPL 2.0
+```
+
+**Description:** Node.js-inspired event loop for .NET. Exactly what we need.
+
+**Key Files:**
+
+- `EventLoopInternal.cs` - Core loop with BlockingCollection
+- `EventLoopSynchronizationContext.cs` - Routes async continuations
+
+**Pros:**
+
+- Simple (~120 lines total)
+- Built-in SynchronizationContext
+- Active task tracking (`_numberOfConcurrentTasks`)
+- Efficient waiting via `GetConsumingEnumerable()`
+
+**Cons:**
+
+- No built-in timer support (we'll add this)
+- Older codebase (.NET 4.5 era, but patterns still valid)
+
+### 2. eLoop (Netty-style)
+
+```
+Location: ReferenceExamples/eLoop/
+License: (check project)
+```
+
+**Description:** Netty-inspired scheduler system with multiple scheduler types.
+
+**Key Files:**
+
+- `SingleSyncQueueScheduler.cs` - Single thread + SynchronizationContext
+- `ThreadPoolScheduler.cs` - Routes to ThreadPool
+- `ASingleScheduler.cs` - Base with Ref/Unref
+
+**Pros:**
+
+- Very flexible
+- Ref/Unref implemented
+- High-performance patterns from Netty
+
+**Cons:**
+
+- Over-engineered for our needs (56 files, 2000+ lines)
+- More complex than necessary
+- Uses ThreadPool-based execution (not dedicated blocking thread)
+
+---
+
+## Detailed Comparison: SharpEventLoop vs eLoop
+
+Since both have SynchronizationContext support, here's a deeper analysis.
+
+### Code Size & Complexity
+
+| Metric         | SharpEventLoop | eLoop       |
+| -------------- | -------------- | ----------- |
+| Total files    | 3              | 56          |
+| Lines of code  | ~120           | ~2000+      |
+| Dependencies   | None           | None        |
+| Learning curve | 5 minutes      | 30+ minutes |
+
+### Core Pattern Comparison
+
+**SharpEventLoop** - Simple, focused:
+
+```csharp
+// The entire loop in ~30 lines:
+private readonly BlockingCollection<Action> _actions;
+
+public void Enter()
+{
+    SynchronizationContext.SetSynchronizationContext(
+        new EventLoopSynchronizationContext(Enqueue));
+
+    foreach (var action in _actions.GetConsumingEnumerable())
+    {
+        action();  // Execute on this thread
+    }
+}
+```
+
+**eLoop** - Flexible, complex:
+
+```csharp
+// Spread across: ASingleScheduler → SingleUnsyncQueueScheduler
+//                → SingleSyncQueueScheduler + ThreadSyncContext
+
+private ConcurrentQueue<Work<object>> requests;
+
+protected void DeliverWorks()
+{
+    while (TryGet(out var item))
+    {
+        switch (item.callback1)
+        {
+            case Action<object> callback0: callback0(item.state); break;
+            case WaitCallback callback1: callback1(item.state); break;
+            case SendOrPostCallback callback2: callback2(item.state); break;
+            case IRunnable runnable: runnable.Execute(item.state); break;
+            // ... more cases
+        }
+    }
+}
+```
+
+### Feature Comparison
+
+| Feature                    | SharpEventLoop                                   | eLoop                                    |
+| -------------------------- | ------------------------------------------------ | ---------------------------------------- |
+| **Single event loop**      | ✅ Yes                                           | ✅ Yes                                   |
+| **SynchronizationContext** | ✅ Built-in                                      | ✅ Optional (`SingleSyncQueueScheduler`) |
+| **Efficient waiting**      | ✅ `BlockingCollection.GetConsumingEnumerable()` | ⚠️ `ConcurrentQueue` + ThreadPool        |
+| **Active task tracking**   | ✅ `_numberOfConcurrentTasks`                    | ✅ `Ref()`/`Unref()`                     |
+| **Partitioned loops**      | ❌ No                                            | ✅ Yes (`ISchedulerAllotter`)            |
+| **Timer scheduling**       | ❌ No (needs adding)                             | ⚠️ Via Netty classes                     |
+
+### Waiting Mechanism (Critical Difference)
+
+**SharpEventLoop** - Truly blocks, zero CPU when idle:
+
+```csharp
+foreach (var action in _actions.GetConsumingEnumerable())
+    action();
+```
+
+**eLoop** - Uses ThreadPool, no dedicated thread:
+
+```csharp
+protected override void ExecuteLoop()
+{
+    if (Interlocked.CompareExchange(ref _doingWork, 1, 0) == 0)
+    {
+        ThreadPool.UnsafeQueueUserWorkItem(this, preferLocal: false);
+    }
+}
+```
+
+### For SharpTS Requirements
+
+| Requirement             | SharpEventLoop     | eLoop                       |
+| ----------------------- | ------------------ | --------------------------- |
+| **Fix polling problem** | ✅ Perfect         | ⚠️ Uses ThreadPool model    |
+| **Fix async context**   | ✅ Built-in        | ✅ Has `ThreadSyncContext`  |
+| **Node.js semantics**   | ✅ Matches exactly | ⚠️ Different model          |
+| **Integration effort**  | ~50 lines          | ~200+ lines to extract      |
+| **Timer integration**   | Easy to add        | Complex (Netty scheduler)   |
+| **Future partitioning** | Need to build      | ✅ Has `ISchedulerAllotter` |
+
+### Recommendation
+
+**Phase 1 (Now): SharpEventLoop**
+
+- Simpler integration
+- Exactly matches Node.js-compatible goal
+- Truly efficient (blocking wait, no ThreadPool polling)
+- Can be implemented in a day
+
+**Future (Multi-threaded mode): Borrow from eLoop**
+
+- `ISchedulerAllotter` pattern for partitioned loops
+- `Ref()`/`Unref()` is similar to what we already have
+- Can add when needed without rewriting Phase 1
+
+### Hybrid Architecture (Future)
+
+We can start with SharpEventLoop and add eLoop-style partitioning later:
+
+```csharp
+// Future architecture for multi-threaded mode:
+interface IEventLoopGroup
+{
+    IEventLoop Next();  // Round-robin selection
+}
+
+class SingleEventLoopGroup : IEventLoopGroup
+{
+    private readonly EventLoop _loop;  // SharpEventLoop-style
+    public IEventLoop Next() => _loop; // Always same loop (current behavior)
+}
+
+class PartitionedEventLoopGroup : IEventLoopGroup
+{
+    private readonly EventLoop[] _loops;  // N loops (one per core)
+    private int _index;
+    public IEventLoop Next() =>
+        _loops[Interlocked.Increment(ref _index) % _loops.Length];
+}
+```
+
+This gives us:
+
+- SharpEventLoop's simplicity now
+- Clear upgrade path to eLoop-style partitioning later
+- Same API surface for both modes
+
+---
+
+### 3. EventLoopSchedulerSlim (External - Rx-based)
+
+```
+Source: https://github.com/GeorgeTsiokos/corlib
+```
+
+**Description:** Lightweight scheduler using Rx patterns.
+
+**Key Pattern:**
+
+```csharp
+readonly ConcurrentQueue<Action> _queue;
+readonly Gate _gate;  // Ensures one Loop() at a time
+
+if (_gate.TryOpen())
+    _scheduler.Schedule(Loop);
+```
+
+**Pros:**
+
+- Very lightweight
+- Doesn't monopolize a thread
+
+**Cons:**
+
+- No SynchronizationContext (doesn't solve async problem)
+- No active task tracking
+
+### 4. SharpTS.Node (Already in project)
+
+```
+Location: SharpTS.Node/EventLoop/
+```
+
+**Description:** Our own Node.js-style event loop implementation.
+
+**Similar to SharpEventLoop** - we could also use this, but it's in a separate library.
+
+### 5. ExpressSharp
+
+```
+Location: ReferenceExamples/ExpressSharp/
+```
+
+**Description:** Express.js-style HTTP framework. Not an event loop - useful for HTTP API patterns only.
+
+### 6. Wired.IO
+
+```
+Location: ReferenceExamples/Wired.IO/
+```
+
+**Description:** High-performance HTTP server. Useful for HTTP optimization patterns, not event loop.
 
 ---
 
@@ -706,118 +1147,394 @@ while (HasActiveHandles && !_isDisposed)
 
 ## Migration Path
 
-### Phase 1: Add SynchronizationContext (Minimal Change)
+### Overview
 
-**Goal:** Fix async continuation routing
+Now that we've decided on single-threaded mode using the SharpEventLoop pattern, the migration is simplified:
 
-**Changes:**
+| Phase  | Goal                                            | Risk   | Effort   |
+| ------ | ----------------------------------------------- | ------ | -------- |
+| 1      | Add SynchronizationContext + BlockingCollection | Medium | 1-2 days |
+| 2      | Integrate timers with new event loop            | Low    | 1 day    |
+| 3      | Validate HTTP server                            | Low    | 1 day    |
+| Future | Multi-threaded opt-in mode                      | TBD    | TBD      |
 
-- Add `InterpreterSynchronizationContext` class
-- Set it in `RunEventLoop()` before processing
-- Route `Post()` to `ScheduleTimer(0, ...)`
+### Phase 1: Event Loop Rewrite (SharpEventLoop Pattern)
 
-**Risk:** Low - only affects async continuations  
-**Benefit:** Async handlers work correctly
+**Goal:** Replace polling with efficient waiting + add SynchronizationContext
 
-### Phase 2: Replace Polling with Efficient Waiting
+**Changes to `Execution/Interpreter.cs`:**
 
-**Goal:** Eliminate CPU waste
+```csharp
+// NEW: Add these fields
+private readonly BlockingCollection<Action> _callbackQueue = new();
+private InterpreterSynchronizationContext? _syncContext;
 
-**Changes:**
+// NEW: Add this class (or separate file)
+private class InterpreterSynchronizationContext : SynchronizationContext
+{
+    private readonly Action<Action> _enqueue;
 
-- Add `BlockingCollection<Action>` to Interpreter
-- Modify `RunEventLoop()` to use `TryTake(timeout)`
-- Modify `ScheduleTimer()` to also enqueue to collection (for immediate wakeup)
+    public InterpreterSynchronizationContext(Action<Action> enqueue)
+        => _enqueue = enqueue;
+
+    public override void Post(SendOrPostCallback d, object? state)
+        => _enqueue(() => d(state));
+
+    public override SynchronizationContext CreateCopy() => this;
+}
+
+// MODIFY: RunEventLoop()
+public void RunEventLoop()
+{
+    _syncContext = new InterpreterSynchronizationContext(EnqueueCallback);
+    var previous = SynchronizationContext.Current;
+    SynchronizationContext.SetSynchronizationContext(_syncContext);
+
+    try
+    {
+        while (HasActiveHandles && !_isDisposed)
+        {
+            // Calculate timeout until next timer
+            var timeout = GetNextTimerTimeout();
+
+            // Wait for callback OR timeout (efficient, no polling!)
+            if (_callbackQueue.TryTake(out var action, timeout))
+            {
+                action();
+            }
+
+            // Process any due timers
+            ProcessDueTimers();
+        }
+    }
+    finally
+    {
+        SynchronizationContext.SetSynchronizationContext(previous);
+        _callbackQueue.CompleteAdding();
+    }
+}
+
+// NEW: Helper to enqueue callbacks
+private void EnqueueCallback(Action action)
+{
+    if (!_isDisposed && !_callbackQueue.IsAddingCompleted)
+    {
+        try { _callbackQueue.Add(action); }
+        catch (InvalidOperationException) { /* completed */ }
+    }
+}
+
+// NEW: Calculate next timer timeout
+private TimeSpan GetNextTimerTimeout()
+{
+    lock (_virtualTimersLock)
+    {
+        if (_virtualTimers.Count == 0)
+            return TimeSpan.FromSeconds(60); // Max wait
+
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var next = _virtualTimers.Min(t => t.FireTimeMs);
+        var ms = Math.Max(0, next - now);
+        return TimeSpan.FromMilliseconds(Math.Min(ms, 60000));
+    }
+}
+```
 
 **Risk:** Medium - changes core event loop  
-**Benefit:** CPU-efficient long-running servers
+**Benefit:**
 
-### Phase 3: Thread-Safe RuntimeEnvironment
+- No more CPU polling (efficient for weeks-long servers)
+- Async/await works correctly
+- Node.js compatible single-threaded semantics
 
-**Goal:** Enable parallel callback execution
+### Phase 2: Timer Integration
 
-**Changes:**
-
-- Add `ReaderWriterLockSlim` to RuntimeEnvironment
-- Wrap Get/Assign with appropriate locks
-- Optionally: Per-variable or per-scope locking
-
-**Risk:** Medium - affects all variable access  
-**Benefit:** Multi-core utilization
-
-### Phase 4: Closure Analysis for Smart Locking
-
-**Goal:** Minimize locking overhead
+**Goal:** Ensure timers work with new event loop
 
 **Changes:**
 
-- Extend `ClosureAnalyzer` to identify captured variables at schedule time
-- Mark only captured variables as needing locks
-- Fast path for purely local callbacks
+- `ScheduleTimer()` should wake the event loop when adding immediate timer
+- `ProcessDueTimers()` extracted from `ProcessPendingCallbacks()`
+- Keep existing timer API for backward compatibility
 
-**Risk:** Medium - needs careful analysis  
-**Benefit:** Best of both worlds (parallelism + safety)
+```csharp
+// MODIFY: ScheduleTimer to wake the loop
+internal VirtualTimer ScheduleTimer(int delayMs, int intervalMs, Action callback, bool isInterval)
+{
+    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    var timer = new VirtualTimer(now + delayMs, intervalMs, callback, isInterval);
 
-### Phase 5: Compiled Mode Event Loop (Future)
+    lock (_virtualTimersLock)
+    {
+        _virtualTimers.Add(timer);
+    }
 
-**Goal:** HTTP support in compiled mode
+    // Wake the event loop if timer is soon
+    if (delayMs <= 10)
+    {
+        EnqueueCallback(() => { }); // Dummy action to wake loop
+    }
 
-**Options:**
+    return timer;
+}
+```
 
-- Reference `SharpTS.Runtime.EventLoop` types
-- Or emit equivalent IL inline
-- Or simple blocking pattern (WaitUntilClosed)
+**Risk:** Low  
+**Benefit:** Timers fire promptly without polling delay
+
+### Phase 3: Validate HTTP Server
+
+**Goal:** Verify everything works together
+
+**Tests:**
+
+- [ ] HTTP server starts and accepts requests
+- [ ] Async request handlers work correctly
+- [ ] `await` in handlers resumes on event loop thread
+- [ ] Server runs for extended period without CPU spin
+- [ ] Multiple concurrent requests handled correctly
+- [ ] `setTimeout`/`setInterval` work alongside HTTP
+
+**Validation Script:**
+
+```bash
+# Start server
+sharpts examples/http.ts &
+
+# Monitor CPU (should be near 0% when idle)
+top -p $!
+
+# Send test requests
+curl http://localhost:3000/
+curl http://localhost:3000/api/info
+
+# Run for 10 minutes, check CPU stays low
+sleep 600
+```
+
+### Future: Multi-Threaded Opt-In Mode
+
+**Deferred until single-threaded mode is mature.**
+
+When needed:
+
+- Add thread-safe RuntimeEnvironment (Option A or D from earlier)
+- Optionally expose multi-threaded mode via config
+- Document threading behavior
 
 ---
 
 ## Reference Patterns
 
-### eLoop (Netty-style)
+### SharpEventLoop ⭐ (Primary Reference)
+
+```
+Location: ReferenceExamples/SharpEventLoop/
+License: MPL 2.0
+```
+
+Key patterns we're adopting:
+
+- `BlockingCollection<Action>` for efficient waiting
+- `GetConsumingEnumerable()` for the main loop
+- `EventLoopSynchronizationContext` for async routing
+- `_numberOfConcurrentTasks` for active task tracking (like our Ref/Unref)
+
+### eLoop (Secondary Reference)
 
 ```
 Location: ReferenceExamples/eLoop/src/eLoop/
 ```
 
-Key patterns:
+Useful patterns:
 
-- `ThreadPoolScheduler` - routes to .NET ThreadPool
-- `SingleSyncQueueScheduler` - single thread with SynchronizationContext
 - `ThreadSyncContext` - routes Post() back to scheduler
-- `ASingleScheduler` - base with Ref/Unref counting
+- `ASingleScheduler` - Ref/Unref counting pattern
+- `SingleSyncQueueScheduler` - SynchronizationContext integration
 
-### SharpTS.Node (Existing)
+### SharpTS.Node (In Project)
 
 ```
 Location: SharpTS.Node/EventLoop/
 ```
 
-Key patterns:
+Similar to SharpEventLoop, already in our codebase. Could be used as alternative.
 
-- `NodeEventLoop` - BlockingCollection-based loop
-- `NodeSynchronizationContext` - routes to Enqueue()
-- `Ref()`/`Unref()` for active handle tracking
-
-### Node.js
+### Node.js (Behavior Reference)
 
 - Single-threaded JavaScript execution
 - libuv uses thread pool for I/O
 - All callbacks on single thread
 - No locking needed in user code
 
-### .NET Kestrel/ASP.NET Core
+**This is the behavior we're matching.**
+
+### .NET Kestrel/ASP.NET Core (Future Reference)
 
 - Full ThreadPool parallelism
 - Async/await for I/O
 - User handles synchronization
 - Very high throughput
 
+**Potential model for future multi-threaded mode.**
+
+---
+
+## Future: Partitioned Event Loops
+
+For future high-performance mode, we can add partitioned event loops (Netty-style).
+
+### The Concept
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    HTTP Accept Loop                              │
+│                         ↓                                        │
+│          New connection arrives                                  │
+│                         ↓                                        │
+│         Allotter.Next() → picks EventLoop N                     │
+└─────────────────────────────────────────────────────────────────┘
+         ↓                    ↓                    ↓
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│ EventLoop 0 │     │ EventLoop 1 │     │ EventLoop 2 │    ... (N loops)
+│ (Thread 0)  │     │ (Thread 1)  │     │ (Thread 2)  │
+├─────────────┤     ├─────────────┤     ├─────────────┤
+│ Conn A      │     │ Conn B      │     │ Conn C      │
+│ Conn D      │     │ Conn E      │     │ Conn F      │
+│ Conn G      │     │ ...         │     │ ...         │
+└─────────────┘     └─────────────┘     └─────────────┘
+```
+
+### Key Properties
+
+- **N event loops** (typically `Environment.ProcessorCount * 2`)
+- Each connection is **pinned** to one loop forever
+- All callbacks for that connection run on the same thread
+- Different connections can process in parallel (on different loops)
+
+### Benefits
+
+| Benefit                             | Explanation                             |
+| ----------------------------------- | --------------------------------------- |
+| **Thread affinity**                 | Each connection always on same thread   |
+| **No locking for connection state** | Only one thread touches each connection |
+| **Multi-core utilization**          | N loops = up to N cores busy            |
+| **Cache efficiency**                | Connection data stays on same CPU cache |
+| **Predictable latency**             | No thread switching within a connection |
+
+### eLoop's Implementation
+
+From `DefaultEventSchedulerAllotter.cs`:
+
+```csharp
+public sealed class DefaultEventSchedulerAllotter : ADefaultAllotter
+{
+    public DefaultEventSchedulerAllotter() : this(Environment.ProcessorCount * 2) { }
+
+    public DefaultEventSchedulerAllotter(int count)
+    {
+        this.Schedulers = new ITaskScheduler[count];
+        for (int i = 0; i < this.Schedulers.Length; i++)
+        {
+            this.Schedulers[i] = new SingleEventScheduler();
+        }
+    }
+}
+```
+
+Usage:
+
+```csharp
+var allotter = new DefaultEventSchedulerAllotter();
+
+// When accepting connection:
+var connectionLoop = allotter.Next();  // Round-robin picks a loop
+
+// All work for this connection goes to its assigned loop:
+connectionLoop.Schedule(() => HandleRequest(req, res));
+```
+
+### Single Loop vs Partitioned Comparison
+
+| Aspect                       | Single Loop (Phase 1) | Partitioned Loops (Future)        |
+| ---------------------------- | --------------------- | --------------------------------- |
+| Threads                      | 1                     | N (cores × 2)                     |
+| Request parallelism          | No                    | Yes (different requests)          |
+| Same-request safety          | ✅ Single-threaded    | ✅ Single-threaded per connection |
+| Shared state across requests | ✅ Safe               | ⚠️ Needs locking                  |
+| Max throughput               | Limited by 1 core     | Scales with cores                 |
+| Complexity                   | Simple                | Medium                            |
+
+### When to Add This
+
+Add partitioned loops when:
+
+- Single-threaded mode is mature and stable
+- Performance profiling shows event loop is the bottleneck
+- Use cases need higher throughput than single core provides
+- Users explicitly request multi-threaded mode
+
 ---
 
 ## Open Questions
 
-### Q1: Lock Granularity
+### ~~Q1: Lock Granularity~~ (Deferred)
 
-Should we lock:
+~~Should we lock per-variable, per-scope, or global?~~
+
+**Decision:** Deferred. Single-threaded mode doesn't need locking.
+
+### Q1 (Revised): Timer Integration
+
+How should timers interact with the new BlockingCollection-based loop?
+
+**Current thinking:**
+
+- Calculate timeout until next timer fire
+- Use `TryTake(timeout)` to wake when timer is due
+- Process timers after each callback or timeout
+
+### Q2: Dispose Handling
+
+What happens when interpreter is disposed while event loop is running?
+
+**Current thinking:**
+
+- Set `_isDisposed` flag
+- Call `_callbackQueue.CompleteAdding()`
+- Loop will exit on next iteration
+
+### Q3: Error Handling in Callbacks
+
+How should exceptions in callbacks be handled?
+
+**Options:**
+
+- Swallow and log (like Node.js uncaughtException)
+- Propagate up (current behavior)
+- Emit error event (Node.js style)
+
+### ~~Q4: Compiled Mode~~ (Deferred)
+
+~~How should compiled mode handle HTTP?~~
+
+**Decision:** Deferred. Compiled mode keeps current behavior (stub that throws). Can revisit when needed.
+
+### Q4 (Revised): SharpTS.Node Consolidation
+
+Should we consolidate SharpTS.Node's EventLoop with the Interpreter's event loop?
+
+**Options:**
+
+- Keep separate (current plan)
+- Merge into shared `SharpTS.Runtime.EventLoop`
+- Have Interpreter use SharpTS.Node directly
+
+**Current thinking:** Keep separate for now. Both are simple enough that duplication is acceptable. Can consolidate later if maintenance becomes an issue.
+
+### Q5: Lock Granularity (Deferred - Future Multi-Threading)
+
+When we eventually add multi-threaded mode, should we lock:
 
 - Per-variable? (max parallelism, deadlock risk)
 - Per-scope? (simpler, coarser)

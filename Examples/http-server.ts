@@ -19,9 +19,6 @@ const server = http.createServer((req, res) => {
   const pathname = parsedUrl.pathname;
   const query = parsedUrl.query;
 
-  // Log the request
-  console.log(req.method + " " + req.url);
-
   // Handle different routes
   if (pathname === "/") {
     res.writeHead(200, { "Content-Type": "text/plain" });
