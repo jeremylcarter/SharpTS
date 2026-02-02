@@ -90,6 +90,7 @@ public partial class Parser
             return FunctionDeclaration("function", isAsync: false, isGenerator: isGenerator);
         }
         if (Match(TokenType.LET)) return VarDeclaration();
+        if (Match(TokenType.VAR)) return VarDeclaration(); // JavaScript var (treated as let)
 
         // Handle 'using' declaration (contextual keyword for explicit resource management)
         if (Check(TokenType.USING) && IsUsingDeclarationContext())
@@ -366,7 +367,7 @@ public partial class Parser
                 // Check for rest parameter
                 bool isRest = Match(TokenType.DOT_DOT_DOT);
 
-                Token paramName = Consume(TokenType.IDENTIFIER, "Expect parameter name.");
+                Token paramName = ConsumeIdentifierAllowingTypeKeywords("Expect parameter name.");
 
                 // Check for optional marker
                 bool isOptional = Match(TokenType.QUESTION);
@@ -533,7 +534,8 @@ public partial class Parser
         while (!Check(TokenType.RIGHT_BRACE) && !IsAtEnd())
         {
             Token memberName = Consume(TokenType.IDENTIFIER, "Expect member name.");
-            Expr? value = Match(TokenType.EQUAL) ? Expression() : null;
+            // Use Assignment() to avoid comma operator - commas separate enum members
+            Expr? value = Match(TokenType.EQUAL) ? Assignment() : null;
             members.Add(new Stmt.EnumMember(memberName, value));
 
             if (!Check(TokenType.RIGHT_BRACE))
@@ -553,7 +555,8 @@ public partial class Parser
             return DestructureObjectDeclaration();
 
         // Standard single-variable declaration
-        Token name = Consume(TokenType.IDENTIFIER, "Expect variable name.");
+        // Allow type keywords as variable names for JavaScript compatibility
+        Token name = ConsumeIdentifierAllowingTypeKeywords("Expect variable name.");
 
         // Check for definite assignment assertion: let x!: number;
         bool hasDefiniteAssignment = Match(TokenType.BANG);
@@ -594,7 +597,7 @@ public partial class Parser
             throw new Exception($"Parse Error at line {name.Line}: 'const' declarations must be initialized.");
         }
 
-        Consume(TokenType.SEMICOLON, "Expect ';' after variable declaration.");
+        ConsumeSemicolonWithASI("Expect ';' after variable declaration.");
 
         // Return Stmt.Const for const declarations, Stmt.Var otherwise
         if (isConst)
@@ -833,7 +836,8 @@ public partial class Parser
         }
 
         Consume(TokenType.EQUAL, "'using' declarations must be initialized.");
-        Expr initializer = Expression();
+        // Use Assignment() to avoid comma operator - commas separate bindings in using
+        Expr initializer = Assignment();
 
         return new Stmt.UsingBinding(name, null, typeAnnotation, initializer);
     }

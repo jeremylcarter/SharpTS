@@ -15,6 +15,7 @@ public interface IExprVisitor<out TResult>
     TResult VisitBinary(Expr.Binary expr);
     TResult VisitLogical(Expr.Logical expr);
     TResult VisitNullishCoalescing(Expr.NullishCoalescing expr);
+    TResult VisitComma(Expr.Comma expr);
     TResult VisitTernary(Expr.Ternary expr);
     TResult VisitGrouping(Expr.Grouping expr);
     TResult VisitLiteral(Expr.Literal expr);

@@ -296,6 +296,10 @@ public partial class Parser
         {
             decl = VarDeclaration();
         }
+        else if (Match(TokenType.VAR))
+        {
+            decl = VarDeclaration(); // JavaScript var (treated as let)
+        }
         else if (Match(TokenType.INTERFACE))
         {
             decl = InterfaceDeclaration();

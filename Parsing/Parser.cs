@@ -211,6 +211,42 @@ public partial class Parser(List<Token> tokens, DecoratorMode decoratorMode = De
     }
 
     /// <summary>
+    /// Consumes a semicolon with Automatic Semicolon Insertion (ASI) support.
+    /// Returns true if semicolon was consumed (explicit or implicit).
+    /// Implicit semicolon is inserted when: newline before next token, next is }, or EOF.
+    /// </summary>
+    private void ConsumeSemicolonWithASI(string message)
+    {
+        // Explicit semicolon
+        if (Check(TokenType.SEMICOLON))
+        {
+            Advance();
+            return;
+        }
+
+        // ASI: implicit semicolon if next token is on a new line
+        if (_current > 0 && Previous().Line < Peek().Line)
+        {
+            return; // Implicit semicolon due to newline
+        }
+
+        // ASI: implicit semicolon before closing brace
+        if (Check(TokenType.RIGHT_BRACE))
+        {
+            return;
+        }
+
+        // ASI: implicit semicolon at end of file
+        if (IsAtEnd())
+        {
+            return;
+        }
+
+        // No ASI applicable - require explicit semicolon
+        throw new Exception($"Parse Error at line {Peek().Line}: {message}");
+    }
+
+    /// <summary>
     /// Consumes a token that can be used as a property name after '.'.
     /// This includes identifiers and reserved keywords (JavaScript allows keywords as property names).
     /// </summary>
@@ -224,7 +260,7 @@ public partial class Parser(List<Token> tokens, DecoratorMode decoratorMode = De
 
         // Accept keywords that can be used as property names
         // In JavaScript/TypeScript, all keywords are valid property names
-        if (IsKeyword(current.Type))
+        if (IsKeyword(current.Type) || IsTypeKeyword(current.Type))
         {
             Advance();
             // Convert keyword token to identifier token for AST consistency
@@ -232,6 +268,39 @@ public partial class Parser(List<Token> tokens, DecoratorMode decoratorMode = De
         }
 
         throw new Exception(message);
+    }
+
+    /// <summary>
+    /// Consumes an identifier, allowing type keywords and other keywords (string, number, type, etc.)
+    /// to be used as identifiers for JavaScript compatibility.
+    /// </summary>
+    private Token ConsumeIdentifierAllowingTypeKeywords(string message)
+    {
+        Token current = Peek();
+
+        // Accept any identifier
+        if (current.Type == TokenType.IDENTIFIER)
+            return Advance();
+
+        // Accept type keywords and contextual keywords as identifiers (JavaScript compatibility)
+        // These are valid identifiers in JavaScript but keywords in TypeScript
+        if (IsTypeKeyword(current.Type) || current.Type is TokenType.TYPE or TokenType.STATIC)
+        {
+            Advance();
+            return new Token(TokenType.IDENTIFIER, current.Lexeme, null, current.Line);
+        }
+
+        throw new Exception(message);
+    }
+
+    /// <summary>
+    /// Checks if a token type is a type keyword that can be used as an identifier in JavaScript.
+    /// </summary>
+    private static bool IsTypeKeyword(TokenType type)
+    {
+        return type is TokenType.TYPE_STRING or TokenType.TYPE_NUMBER or TokenType.TYPE_BOOLEAN
+            or TokenType.TYPE_SYMBOL or TokenType.TYPE_BIGINT
+            or TokenType.VOID or TokenType.NEVER or TokenType.UNKNOWN;
     }
 
     /// <summary>

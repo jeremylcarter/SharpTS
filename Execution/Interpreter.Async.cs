@@ -579,9 +579,13 @@ public partial class Interpreter
     {
         object? obj = await EvaluateAsync(logical.Object);
 
+        var location = _currentModule?.Path != null
+            ? $" in '{_currentModule.Path}' at line {logical.Name.Line}"
+            : $" at line {logical.Name.Line}";
+
         if (!TryGetProperty(obj, logical.Name, out object? currentValue))
         {
-            throw new Exception("Only instances and objects have fields.");
+            throw new Exception($"Only instances and objects have fields{location}.");
         }
 
         switch (logical.Operator.Type)
@@ -600,7 +604,7 @@ public partial class Interpreter
         object? newValue = await EvaluateAsync(logical.Value);
         if (!TrySetProperty(obj, logical.Name, newValue))
         {
-            throw new Exception("Only instances and objects have fields.");
+            throw new Exception($"Only instances and objects have fields{location}.");
         }
         return newValue;
     }

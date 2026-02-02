@@ -51,6 +51,7 @@ public abstract record Expr
         Binary e => visitor.VisitBinary(e),
         Logical e => visitor.VisitLogical(e),
         NullishCoalescing e => visitor.VisitNullishCoalescing(e),
+        Comma e => visitor.VisitComma(e),
         Ternary e => visitor.VisitTernary(e),
         Grouping e => visitor.VisitGrouping(e),
         Literal e => visitor.VisitLiteral(e),
@@ -98,6 +99,11 @@ public abstract record Expr
     public record Binary(Expr Left, Token Operator, Expr Right) : Expr;
     public record Logical(Expr Left, Token Operator, Expr Right) : Expr;
     public record NullishCoalescing(Expr Left, Expr Right) : Expr;
+    /// <summary>
+    /// Comma expression (sequence expression): evaluates left, then right, returns right.
+    /// Used in for loop initializers: for (a = 0, b = 1; ...)
+    /// </summary>
+    public record Comma(Expr Left, Expr Right) : Expr;
     public record Ternary(Expr Condition, Expr ThenBranch, Expr ElseBranch) : Expr;
     public record Grouping(Expr Expression) : Expr;
     public record Literal(object? Value) : Expr;

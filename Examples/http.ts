@@ -3,11 +3,12 @@
 // Then visit http://localhost:3000/ in your browser
 
 import http from "http";
+import { formatRequestLog, greet } from "./test";
 
-const PORT = 3000;
+const PORT = 8080;
 
 const server = http.createServer((req, res) => {
-  console.log("Request received: " + req.method + " " + req.url);
+  console.log(formatRequestLog(req.method, req.url));
 
   // Set JSON content type
   res.setHeader("Content-Type", "application/json");
@@ -15,7 +16,7 @@ const server = http.createServer((req, res) => {
 
   // Create response object
   const responseData = {
-    message: "Hello from SharpTS HTTP server!",
+    message: greet("SharpTS"),
     method: req.method,
     url: req.url,
   };

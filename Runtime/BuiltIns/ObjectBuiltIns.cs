@@ -17,6 +17,8 @@ public static class ObjectBuiltIns
             .Method("seal", 1, Seal)
             .Method("isFrozen", 1, IsFrozen)
             .Method("isSealed", 1, IsSealed)
+            .Method("defineProperty", 3, DefineProperty)
+            .Method("create", 1, 2, Create)
             .Build();
 
     /// <summary>
@@ -226,6 +228,62 @@ public static class ObjectBuiltIns
             // Non-extensible primitives are considered sealed in JavaScript
             _ => true
         };
+    }
+
+    private static object? DefineProperty(Interpreter interpreter, List<object?> args)
+    {
+        // Object.defineProperty(obj, prop, descriptor)
+        var propName = args[1]?.ToString() ?? "";
+        var descriptor = args[2] as SharpTSObject;
+
+        if (descriptor == null)
+            throw new Exception("Runtime Error: Object.defineProperty() requires a descriptor object");
+
+        // Check for getter
+        var getter = descriptor.GetProperty("get");
+        var value = getter is ISharpTSCallable getterFn
+            ? new SharpTSPropertyDescriptor(getterFn, null) as object
+            : descriptor.GetProperty("value");
+
+        // Handle different target types
+        switch (args[0])
+        {
+            case ISharpTSPropertyAccessor accessor:
+                accessor.SetProperty(propName, value);
+                break;
+            case SharpTSFunction func:
+                // Functions can have properties in JavaScript
+                func.SetProperty(propName, value);
+                break;
+            default:
+                var typeName = args[0]?.GetType().Name ?? "null";
+                throw new Exception($"Runtime Error: Object.defineProperty() requires an object target, got {typeName}");
+        }
+
+        return args[0];
+    }
+
+    private static object? Create(Interpreter interpreter, List<object?> args)
+    {
+        // Object.create(proto, [propertiesObject])
+        // Simplified: create an empty object (ignores prototype for now)
+        var result = new SharpTSObject(new Dictionary<string, object?>());
+
+        // If properties descriptor provided, apply them
+        if (args.Count > 1 && args[1] is SharpTSObject properties)
+        {
+            foreach (var key in properties.Fields.Keys)
+            {
+                var descriptor = properties.GetProperty(key) as SharpTSObject;
+                if (descriptor != null)
+                {
+                    var value = descriptor.GetProperty("value");
+                    result.SetProperty(key, value);
+                }
+            }
+        }
+
+        return result;
     }
 
     /// <summary>

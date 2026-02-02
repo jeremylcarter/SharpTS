@@ -25,6 +25,19 @@ public class ModuleInstance
     public bool IsExecuted { get; set; }
 
     /// <summary>
+    /// CommonJS module.exports object for CJS modules.
+    /// </summary>
+    public SharpTSObject CjsModule { get; } = new(new Dictionary<string, object?>
+    {
+        ["exports"] = new SharpTSObject(new Dictionary<string, object?>())
+    });
+
+    /// <summary>
+    /// Gets the CommonJS exports object (module.exports).
+    /// </summary>
+    public object? GetCjsExports() => CjsModule.GetProperty("exports");
+
+    /// <summary>
     /// Gets all exports as a SharpTSObject for namespace imports.
     /// </summary>
     public SharpTSObject ExportsAsObject()

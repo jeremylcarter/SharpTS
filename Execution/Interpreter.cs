@@ -1,3 +1,4 @@
+using System.Text.Json;
 using SharpTS.Modules;
 using SharpTS.Parsing;
 using SharpTS.Parsing.Visitors;
@@ -489,7 +490,26 @@ public partial class Interpreter : IDisposable, IExprVisitor<object?>, IStmtVisi
         if (name.Lexeme == "__filename") return _currentModule?.Path ?? "";
         if (name.Lexeme == "__dirname") return Path.GetDirectoryName(_currentModule?.Path) ?? "";
 
-        throw new Exception($"Undefined variable '{name.Lexeme}'.");
+        // CommonJS globals (module, exports, require)
+        if (name.Lexeme == "module") return _currentModuleInstance?.CjsModule;
+        if (name.Lexeme == "exports") return _currentModuleInstance?.GetCjsExports();
+        if (name.Lexeme == "require") return new CommonJSRequire(this, _currentModule?.Path);
+
+        // Node.js timer globals (setImmediate, clearImmediate)
+        if (name.Lexeme == "setImmediate") return new SetImmediateCallable(this);
+        if (name.Lexeme == "clearImmediate") return new ClearImmediateCallable();
+
+        // JavaScript built-in constructors/namespaces (Number, String, Boolean, Array, Object)
+        // These are used in JavaScript as both constructors and namespaces for static methods
+        if (name.Lexeme is "Number" or "String" or "Boolean" or "Array" or "Object" or "Date" or "RegExp" or "Error" or "Promise")
+        {
+            return new BuiltInNamespaceWrapper(name.Lexeme);
+        }
+
+        var location = _currentModule?.Path != null
+            ? $" in '{_currentModule.Path}' at line {name.Line}"
+            : $" at line {name.Line}";
+        throw new Exception($"Undefined variable '{name.Lexeme}'{location}.");
     }
 
     /// <summary>
@@ -736,15 +756,50 @@ public partial class Interpreter : IDisposable, IExprVisitor<object?>, IStmtVisi
                 {
                     moduleInstance.SetExport(name, value);
                 }
-                // Set default export to all exports, enabling: import fs from 'fs'
-                moduleInstance.DefaultExport = moduleInstance.ExportsAsObject();
+
+                // If there's a "default" export, use it; otherwise use all exports as an object
+                // This allows modules like 'debug' to export a function directly
+                if (exports.TryGetValue("default", out var defaultExport) && defaultExport != null)
+                {
+                    moduleInstance.DefaultExport = defaultExport;
+                    // For CommonJS require(), the CJS exports should be the default
+                    if (moduleInstance.CjsModule.GetProperty("exports") is SharpTSObject cjsExports)
+                    {
+                        // Replace CJS exports with the default export for require() calls
+                        moduleInstance.CjsModule.SetProperty("exports", defaultExport);
+                    }
+                }
+                else
+                {
+                    // Set default export to all exports, enabling: import fs from 'fs'
+                    moduleInstance.DefaultExport = moduleInstance.ExportsAsObject();
+                }
             }
+            moduleInstance.IsExecuted = true;
+            return;
+        }
+
+        // Handle JSON files - parse as JSON and export as object
+        if (module.IsJson || module.Path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+        {
+            var jsonContent = File.ReadAllText(module.Path);
+            var jsonObject = ParseJsonToSharpTSObject(jsonContent);
+            moduleInstance.DefaultExport = jsonObject;
+            moduleInstance.CjsModule.SetProperty("exports", jsonObject);
             moduleInstance.IsExecuted = true;
             return;
         }
 
         // Create module-scoped environment
         var moduleEnv = new RuntimeEnvironment(_environment);
+
+        // For .js files, define CommonJS globals in the module environment
+        // This allows reassignment like: exports = module.exports = value
+        if (module.Path.EndsWith(".js", StringComparison.OrdinalIgnoreCase))
+        {
+            moduleEnv.Define("module", moduleInstance.CjsModule);
+            moduleEnv.Define("exports", moduleInstance.GetCjsExports());
+        }
 
         // Bind imports from dependencies
         BindModuleImports(module, moduleEnv);
@@ -778,8 +833,51 @@ public partial class Interpreter : IDisposable, IExprVisitor<object?>, IStmtVisi
                     if (result.IsAbrupt) break;
                 }
             }
+
+            // For .js files, set DefaultExport from module.exports for ESM interop
+            if (module.Path.EndsWith(".js", StringComparison.OrdinalIgnoreCase))
+            {
+                var cjsExports = moduleInstance.CjsModule.GetProperty("exports");
+                moduleInstance.DefaultExport = cjsExports;
+            }
+
             moduleInstance.IsExecuted = true;
         }
+    }
+
+    /// <summary>
+    /// CommonJS require() implementation - loads and returns a module's exports.
+    /// </summary>
+    /// <param name="path">The module path (relative or bare specifier).</param>
+    /// <param name="fromPath">The path of the requiring module.</param>
+    /// <returns>The module's exports (CJS module.exports or ESM default/named exports).</returns>
+    internal object? RequireModule(string path, string? fromPath)
+    {
+        if (_moduleResolver == null || fromPath == null)
+        {
+            throw new Exception($"Runtime Error: require() is not available outside module context.");
+        }
+
+        string resolvedPath = _moduleResolver.ResolveModulePath(path, fromPath);
+
+        // Check if module is already loaded
+        if (!_loadedModules.TryGetValue(resolvedPath, out var moduleInstance))
+        {
+            // Load and execute the module
+            var parsedModule = _moduleResolver.LoadModule(resolvedPath);
+            ExecuteModule(parsedModule);
+            moduleInstance = _loadedModules[resolvedPath];
+        }
+
+        // Return CJS module.exports if set, otherwise return ESM exports as object
+        var cjsExports = moduleInstance.GetCjsExports();
+        if (cjsExports is SharpTSObject obj && obj.Fields.Count > 0)
+        {
+            return cjsExports;
+        }
+
+        // Fall back to ESM exports
+        return moduleInstance.DefaultExport ?? moduleInstance.ExportsAsObject();
     }
 
     /// <summary>
@@ -806,7 +904,10 @@ public partial class Interpreter : IDisposable, IExprVisitor<object?>, IStmtVisi
                 // Default import
                 if (import.DefaultImport != null)
                 {
-                    env.Define(import.DefaultImport.Lexeme, importedModuleInstance.DefaultExport);
+                    // For .js files, use CJS module.exports as default export
+                    object? defaultValue;
+                    defaultValue = importedModuleInstance.DefaultExport;
+                    env.Define(import.DefaultImport.Lexeme, defaultValue);
                 }
 
                 // Namespace import: import * as Module from './file'
@@ -1601,4 +1702,33 @@ public partial class Interpreter : IDisposable, IExprVisitor<object?>, IStmtVisi
 
     public ExecutionResult VisitUsing(Stmt.Using usingStmt) => ExecuteUsingDeclaration(usingStmt);
 
+    /// <summary>
+    /// Parses a JSON string and converts it to a SharpTSObject.
+    /// Used for loading .json files as modules.
+    /// </summary>
+    private static object? ParseJsonToSharpTSObject(string jsonContent)
+    {
+        using var doc = JsonDocument.Parse(jsonContent);
+        return ConvertJsonElement(doc.RootElement);
+    }
+
+    private static object? ConvertJsonElement(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Null => null,
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Number => element.GetDouble(),
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Array => new SharpTSArray(
+                element.EnumerateArray().Select(ConvertJsonElement).ToList()),
+            JsonValueKind.Object => new SharpTSObject(
+                element.EnumerateObject().ToDictionary(
+                    p => p.Name,
+                    p => ConvertJsonElement(p.Value))),
+            _ => null
+        };
+    }
 }
+

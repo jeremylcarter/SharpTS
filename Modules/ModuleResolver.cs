@@ -55,10 +55,15 @@ public class ModuleResolver
         }
         else
         {
-            // Check for built-in modules first (fs, path, os, etc.)
-            if (BuiltInModuleRegistry.IsBuiltIn(specifier))
+            // Handle node: protocol prefix (e.g., 'node:events' -> 'events')
+            var moduleName = specifier.StartsWith("node:", StringComparison.OrdinalIgnoreCase)
+                ? specifier[5..]
+                : specifier;
+
+            // Check for built-in modules first (fs, path, os, events, etc.)
+            if (BuiltInModuleRegistry.IsBuiltIn(moduleName))
             {
-                return BuiltInModuleRegistry.GetBuiltInPath(specifier);
+                return BuiltInModuleRegistry.GetBuiltInPath(moduleName);
             }
 
             // Bare specifier (e.g., 'lodash')
@@ -84,24 +89,96 @@ public class ModuleResolver
         {
             string nodeModulesPath = Path.Combine(currentDir, "node_modules", specifier);
 
-            // Try index.ts
-            string indexPath = Path.Combine(nodeModulesPath, "index.ts");
-            if (File.Exists(indexPath))
+            // Check if directory exists (it's a package folder)
+            if (Directory.Exists(nodeModulesPath))
             {
-                return indexPath;
+                // Try package.json "main" field first
+                string packageJsonPath = Path.Combine(nodeModulesPath, "package.json");
+                if (File.Exists(packageJsonPath))
+                {
+                    string? mainEntry = GetPackageJsonMain(packageJsonPath);
+                    if (mainEntry != null)
+                    {
+                        string mainPath = Path.GetFullPath(Path.Combine(nodeModulesPath, mainEntry));
+                        if (File.Exists(mainPath))
+                        {
+                            return mainPath;
+                        }
+                        // Try adding extensions if main doesn't have one
+                        string? resolved = TryAddExtension(mainPath);
+                        if (resolved != null) return resolved;
+                    }
+                }
+
+                // Try index.ts first (prefer TypeScript)
+                string indexTsPath = Path.Combine(nodeModulesPath, "index.ts");
+                if (File.Exists(indexTsPath))
+                {
+                    return indexTsPath;
+                }
+
+                // Try index.js (for JavaScript packages)
+                string indexJsPath = Path.Combine(nodeModulesPath, "index.js");
+                if (File.Exists(indexJsPath))
+                {
+                    return indexJsPath;
+                }
             }
 
-            // Try package.json main field (simplified - just check for index)
-            string directPath = nodeModulesPath + ".ts";
-            if (File.Exists(directPath))
+            // Try direct .ts file
+            string directTsPath = nodeModulesPath + ".ts";
+            if (File.Exists(directTsPath))
             {
-                return directPath;
+                return directTsPath;
+            }
+
+            // Try direct .js file
+            string directJsPath = nodeModulesPath + ".js";
+            if (File.Exists(directJsPath))
+            {
+                return directJsPath;
             }
 
             // Move up one directory
             currentDir = Path.GetDirectoryName(currentDir);
         }
 
+        return null;
+    }
+
+    /// <summary>
+    /// Reads the "main" field from a package.json file.
+    /// </summary>
+    private static string? GetPackageJsonMain(string packageJsonPath)
+    {
+        try
+        {
+            string json = File.ReadAllText(packageJsonPath);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("main", out var mainElement))
+            {
+                return mainElement.GetString();
+            }
+        }
+        catch
+        {
+            // Ignore parse errors
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Tries to add .ts or .js extension to a path if the file doesn't exist.
+    /// </summary>
+    private static string? TryAddExtension(string path)
+    {
+        if (File.Exists(path + ".ts")) return path + ".ts";
+        if (File.Exists(path + ".js")) return path + ".js";
+        if (Directory.Exists(path))
+        {
+            if (File.Exists(Path.Combine(path, "index.ts"))) return Path.Combine(path, "index.ts");
+            if (File.Exists(Path.Combine(path, "index.js"))) return Path.Combine(path, "index.js");
+        }
         return null;
     }
 
@@ -113,21 +190,47 @@ public class ModuleResolver
             return path;
         }
 
-        // Try adding .ts extension
+        // If path already has .json extension and exists, use it
+        if (path.EndsWith(".json", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+        {
+            return path;
+        }
+
+        // If path already has .js extension and exists, use it
+        if (path.EndsWith(".js", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+        {
+            return path;
+        }
+
+        // Try adding .ts extension (prefer TypeScript)
         string withTs = path + ".ts";
         if (File.Exists(withTs))
         {
             return withTs;
         }
 
-        // Try path as-is (might be a directory with index.ts)
-        string indexPath = Path.Combine(path, "index.ts");
-        if (Directory.Exists(path) && File.Exists(indexPath))
+        // Try adding .js extension
+        string withJs = path + ".js";
+        if (File.Exists(withJs))
         {
-            return indexPath;
+            return withJs;
         }
 
-        // If original path exists (maybe .js or no extension), use it
+        // Try path as directory with index.ts
+        string indexTsPath = Path.Combine(path, "index.ts");
+        if (Directory.Exists(path) && File.Exists(indexTsPath))
+        {
+            return indexTsPath;
+        }
+
+        // Try path as directory with index.js
+        string indexJsPath = Path.Combine(path, "index.js");
+        if (Directory.Exists(path) && File.Exists(indexJsPath))
+        {
+            return indexJsPath;
+        }
+
+        // If original path exists (no extension), use it
         if (File.Exists(path))
         {
             return path;
@@ -253,6 +356,14 @@ public class ModuleResolver
 
         try
         {
+            // Handle JSON files specially - they don't need parsing
+            if (absolutePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                var jsonModule = new ParsedModule(absolutePath, []) { IsScript = false, IsJson = true };
+                _moduleCache[absolutePath] = jsonModule;
+                return jsonModule;
+            }
+
             string source = File.ReadAllText(absolutePath);
 
             var lexer = new Lexer(source);
@@ -263,7 +374,8 @@ public class ModuleResolver
             // For module loading, we throw on parse errors (backward compatible)
             if (!parseResult.IsSuccess)
             {
-                throw new Exception(parseResult.Diagnostics.First().ToString());
+                var diagnostic = parseResult.Diagnostics.First();
+                throw new Exception($"Parse Error in '{absolutePath}' at line {diagnostic.Location?.Line ?? 0}: {diagnostic.Message}");
             }
 
             var statements = parseResult.Statements;

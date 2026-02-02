@@ -137,6 +137,15 @@ public partial class TypeChecker
         return new TypeInfo.Union([nonNullishLeft, rightType]);
     }
 
+    /// <summary>
+    /// Type-checks a comma expression. Returns the type of the right operand.
+    /// </summary>
+    private TypeInfo CheckComma(Expr.Comma comma)
+    {
+        CheckExpr(comma.Left);  // Check left for errors but discard type
+        return CheckExpr(comma.Right);  // Return right's type
+    }
+
     private TypeInfo CheckTernary(Expr.Ternary ternary)
     {
         CheckExpr(ternary.Condition);

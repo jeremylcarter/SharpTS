@@ -53,7 +53,10 @@ public partial class Interpreter
             }
         }
 
-        throw new Exception("Only instances and objects have fields.");
+        var location = _currentModule?.Path != null
+            ? $" in '{_currentModule.Path}' at line {compound.Name.Line}"
+            : $" at line {compound.Name.Line}";
+        throw new Exception($"Only instances and objects have fields{location}.");
     }
 
     /// <summary>
@@ -123,9 +126,13 @@ public partial class Interpreter
     {
         object? obj = Evaluate(logical.Object);
 
+        var location = _currentModule?.Path != null
+            ? $" in '{_currentModule.Path}' at line {logical.Name.Line}"
+            : $" at line {logical.Name.Line}";
+
         if (!TryGetProperty(obj, logical.Name, out object? currentValue))
         {
-            throw new Exception("Only instances and objects have fields.");
+            throw new Exception($"Only instances and objects have fields{location}.");
         }
 
         switch (logical.Operator.Type)
@@ -145,7 +152,7 @@ public partial class Interpreter
         object? newValue = Evaluate(logical.Value);
         if (!TrySetProperty(obj, logical.Name, newValue))
         {
-            throw new Exception("Only instances and objects have fields.");
+            throw new Exception($"Only instances and objects have fields{location}.");
         }
         return newValue;
     }

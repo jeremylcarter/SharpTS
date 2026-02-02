@@ -58,6 +58,7 @@ public partial class TypeChecker
     public TypeInfo VisitBinary(Expr.Binary expr) => CheckBinary(expr);
     public TypeInfo VisitLogical(Expr.Logical expr) => CheckLogical(expr);
     public TypeInfo VisitNullishCoalescing(Expr.NullishCoalescing expr) => CheckNullishCoalescing(expr);
+    public TypeInfo VisitComma(Expr.Comma expr) => CheckComma(expr);
     public TypeInfo VisitTernary(Expr.Ternary expr) => CheckTernary(expr);
     public TypeInfo VisitUnary(Expr.Unary expr) => CheckUnary(expr);
     public TypeInfo VisitDelete(Expr.Delete expr) => CheckDelete(expr);
@@ -1084,10 +1085,15 @@ public partial class TypeChecker
         if (name.Lexeme == "__dirname") return new TypeInfo.Primitive(TokenType.TYPE_STRING); // Node.js __dirname
         if (name.Lexeme == "__filename") return new TypeInfo.Primitive(TokenType.TYPE_STRING); // Node.js __filename
 
+        // CommonJS globals
+        if (name.Lexeme == "module") return new TypeInfo.Any(); // CommonJS module object
+        if (name.Lexeme == "exports") return new TypeInfo.Any(); // CommonJS exports alias
+        if (name.Lexeme == "require") return new TypeInfo.Any(); // CommonJS require function
+
         var type = _environment.Get(name.Lexeme);
         if (type == null)
         {
-             throw new TypeCheckException($" Undefined variable '{name.Lexeme}'.");
+            throw new TypeCheckException($" Undefined variable '{name.Lexeme}'.");
         }
         return type;
     }

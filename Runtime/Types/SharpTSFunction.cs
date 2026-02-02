@@ -35,12 +35,55 @@ public class SharpTSFunction : ISharpTSCallable
     private readonly Stmt.Function _declaration;
     private readonly RuntimeEnvironment _closure;
     private readonly int _arity;
+    private Dictionary<string, object?>? _properties;
+    private SharpTSObject? _prototype;
 
     public SharpTSFunction(Stmt.Function declaration, RuntimeEnvironment closure)
     {
         _declaration = declaration;
         _closure = closure;
         _arity = declaration.Parameters.Count(p => p.DefaultValue == null && !p.IsRest && !p.IsOptional);
+    }
+
+    /// <summary>
+    /// Gets the prototype object for this function (for constructor usage).
+    /// </summary>
+    public SharpTSObject Prototype
+    {
+        get
+        {
+            _prototype ??= new SharpTSObject(new Dictionary<string, object?>
+            {
+                ["constructor"] = this
+            });
+            return _prototype;
+        }
+    }
+
+    /// <summary>
+    /// Sets a property on this function (functions are objects in JavaScript).
+    /// </summary>
+    public void SetProperty(string name, object? value)
+    {
+        if (name == "prototype")
+        {
+            _prototype = value as SharpTSObject ?? new SharpTSObject(new Dictionary<string, object?>());
+            return;
+        }
+        _properties ??= [];
+        _properties[name] = value;
+    }
+
+    /// <summary>
+    /// Gets a property from this function.
+    /// </summary>
+    public object? GetProperty(string name)
+    {
+        if (name == "prototype")
+            return Prototype;
+        if (_properties != null && _properties.TryGetValue(name, out var value))
+            return value;
+        return null;
     }
 
     public int Arity() => _arity;
@@ -127,6 +170,9 @@ public class SharpTSArrowFunction : ISharpTSCallable
     /// </summary>
     public bool HasOwnThis { get; }
 
+    private Dictionary<string, object?>? _properties;
+    private SharpTSObject? _prototype;
+
     public SharpTSArrowFunction(Expr.ArrowFunction declaration, RuntimeEnvironment closure, bool hasOwnThis = false)
     {
         _declaration = declaration;
@@ -136,6 +182,47 @@ public class SharpTSArrowFunction : ISharpTSCallable
     }
 
     public int Arity() => _arity;
+
+    /// <summary>
+    /// Gets the prototype object for this function (for constructor usage).
+    /// </summary>
+    public SharpTSObject Prototype
+    {
+        get
+        {
+            _prototype ??= new SharpTSObject(new Dictionary<string, object?>
+            {
+                ["constructor"] = this
+            });
+            return _prototype;
+        }
+    }
+
+    /// <summary>
+    /// Sets a property on this function (functions are objects in JavaScript).
+    /// </summary>
+    public void SetProperty(string name, object? value)
+    {
+        if (name == "prototype")
+        {
+            _prototype = value as SharpTSObject ?? new SharpTSObject(new Dictionary<string, object?>());
+            return;
+        }
+        _properties ??= [];
+        _properties[name] = value;
+    }
+
+    /// <summary>
+    /// Gets a property from this function.
+    /// </summary>
+    public object? GetProperty(string name)
+    {
+        if (name == "prototype")
+            return Prototype;
+        if (_properties != null && _properties.TryGetValue(name, out var value))
+            return value;
+        return null;
+    }
 
     public object? Call(Interpreter interpreter, List<object?> arguments)
     {

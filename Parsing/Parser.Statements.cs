@@ -42,12 +42,13 @@ public partial class Parser
         Token? label = null;
 
         // Check for optional label: break labelName;
-        if (Check(TokenType.IDENTIFIER))
+        // Label must be on the same line as 'break' (ASI rule)
+        if (Check(TokenType.IDENTIFIER) && Peek().Line == keyword.Line)
         {
             label = Advance();
         }
 
-        Consume(TokenType.SEMICOLON, "Expect ';' after 'break'.");
+        ConsumeSemicolonWithASI("Expect ';' after 'break'.");
         return new Stmt.Break(keyword, label);
     }
 
@@ -57,12 +58,13 @@ public partial class Parser
         Token? label = null;
 
         // Check for optional label: continue labelName;
-        if (Check(TokenType.IDENTIFIER))
+        // Label must be on the same line as 'continue' (ASI rule)
+        if (Check(TokenType.IDENTIFIER) && Peek().Line == keyword.Line)
         {
             label = Advance();
         }
 
-        Consume(TokenType.SEMICOLON, "Expect ';' after 'continue'.");
+        ConsumeSemicolonWithASI("Expect ';' after 'continue'.");
         return new Stmt.Continue(keyword, label);
     }
 
@@ -73,14 +75,37 @@ public partial class Parser
 
         Consume(TokenType.LEFT_PAREN, "Expect '(' after 'for" + (isAsync ? " await" : "") + "'.");
 
-        // Check for for...of pattern: for (let/const varName of iterable)
-        if (Match(TokenType.LET, TokenType.CONST))
+        // Check for for...of/in pattern: for (let/const/var varName of iterable)
+        // Also supports destructuring: for (const [a, b] of iterable)
+        if (Match(TokenType.LET, TokenType.CONST, TokenType.VAR))
         {
-            Token varName = Consume(TokenType.IDENTIFIER, "Expect variable name.");
+            // Check for destructuring patterns: [a, b] or { x, y }
+            bool isArrayDestructure = Check(TokenType.LEFT_BRACKET);
+            bool isObjectDestructure = Check(TokenType.LEFT_BRACE);
+            Token? varName = null;
+            int patternLine = Peek().Line;
 
-            // Check for optional type annotation
+            ArrayPattern? arrayPattern = null;
+            ObjectPattern? objectPattern = null;
+
+            if (isArrayDestructure)
+            {
+                Advance(); // consume [
+                arrayPattern = ParseArrayPattern();
+            }
+            else if (isObjectDestructure)
+            {
+                Advance(); // consume {
+                objectPattern = ParseObjectPattern();
+            }
+            else
+            {
+                varName = Consume(TokenType.IDENTIFIER, "Expect variable name.");
+            }
+
+            // Check for optional type annotation (only for simple binding)
             string? typeAnnotation = null;
-            if (Match(TokenType.COLON))
+            if (varName != null && Match(TokenType.COLON))
             {
                 typeAnnotation = ParseTypeAnnotation();
             }
@@ -91,7 +116,24 @@ public partial class Parser
                 Expr iterable = Expression();
                 Consume(TokenType.RIGHT_PAREN, "Expect ')' after for...of expression.");
                 Stmt body = Statement();
-                return new Stmt.ForOf(varName, typeAnnotation, iterable, body, isAsync);
+
+                // Destructuring: desugar into for...of with temp var + destructure statement
+                if (arrayPattern != null)
+                {
+                    Token tempVar = GenerateTempVar(patternLine);
+                    var destructure = DesugarArrayPattern(arrayPattern, new Expr.Variable(tempVar));
+                    var newBody = new Stmt.Block([destructure, body]);
+                    return new Stmt.ForOf(tempVar, null, iterable, newBody, isAsync);
+                }
+                if (objectPattern != null)
+                {
+                    Token tempVar = GenerateTempVar(patternLine);
+                    var destructure = DesugarObjectPattern(objectPattern, new Expr.Variable(tempVar));
+                    var newBody = new Stmt.Block([destructure, body]);
+                    return new Stmt.ForOf(tempVar, null, iterable, newBody, isAsync);
+                }
+
+                return new Stmt.ForOf(varName!, typeAnnotation, iterable, body, isAsync);
             }
 
             // 'for await' must be followed by 'of', not 'in' or traditional for
@@ -103,13 +145,21 @@ public partial class Parser
             // If we see 'in', this is a for...in loop
             if (Match(TokenType.IN))
             {
+                if (arrayPattern != null || objectPattern != null)
+                {
+                    throw new Exception("Destructuring is not supported in for...in loops.");
+                }
                 Expr obj = Expression();
                 Consume(TokenType.RIGHT_PAREN, "Expect ')' after for...in expression.");
                 Stmt body = Statement();
-                return new Stmt.ForIn(varName, typeAnnotation, obj, body);
+                return new Stmt.ForIn(varName!, typeAnnotation, obj, body);
             }
 
             // Otherwise it's a traditional for loop - we need to handle the initializer
+            if (arrayPattern != null || objectPattern != null)
+            {
+                throw new Exception("Destructuring in traditional for loops requires '=' initializer.");
+            }
             // We've already consumed let/const and the variable name, so reconstruct
             Expr? initValue = null;
             if (Match(TokenType.EQUAL))
@@ -118,8 +168,31 @@ public partial class Parser
             }
             Consume(TokenType.SEMICOLON, "Expect ';' after variable declaration.");
 
-            Stmt initializer = new Stmt.Var(varName, typeAnnotation, initValue);
+            Stmt initializer = new Stmt.Var(varName!, typeAnnotation, initValue);
             return FinishTraditionalFor(initializer);
+        }
+
+        // Check for for...in/of with existing variable: for (varName in/of expr)
+        if (Check(TokenType.IDENTIFIER))
+        {
+            Token existingVar = Advance();
+            if (Match(TokenType.IN))
+            {
+                Expr obj = Expression();
+                Consume(TokenType.RIGHT_PAREN, "Expect ')' after for...in expression.");
+                Stmt body = Statement();
+                // Use null for typeAnnotation since it's an existing variable
+                return new Stmt.ForIn(existingVar, null, obj, body);
+            }
+            if (Match(TokenType.OF))
+            {
+                Expr iterable = Expression();
+                Consume(TokenType.RIGHT_PAREN, "Expect ')' after for...of expression.");
+                Stmt body = Statement();
+                return new Stmt.ForOf(existingVar, null, iterable, body, isAsync);
+            }
+            // Not a for...in/of, backtrack and parse as traditional for
+            _current--;
         }
 
         // Traditional for loop without let/const
@@ -130,7 +203,10 @@ public partial class Parser
         }
         else
         {
-            init = ExpressionStatement();
+            // Parse expression (may use comma operator: k = 0, len = arr.length)
+            Expr expr = Expression();
+            Consume(TokenType.SEMICOLON, "Expect ';' after for loop initializer.");
+            init = new Stmt.Expression(expr);
         }
 
         return FinishTraditionalFor(init);
@@ -185,12 +261,15 @@ public partial class Parser
     {
         Token keyword = Previous();
         Expr? value = null;
-        if (!Check(TokenType.SEMICOLON))
+
+        // ASI: return followed by newline, }, or EOF is bare return (returns undefined)
+        bool hasNewline = _current > 0 && Previous().Line < Peek().Line;
+        if (!Check(TokenType.SEMICOLON) && !Check(TokenType.RIGHT_BRACE) && !hasNewline && !IsAtEnd())
         {
             value = Expression();
         }
 
-        Consume(TokenType.SEMICOLON, "Expect ';' after return value.");
+        ConsumeSemicolonWithASI("Expect ';' after return value.");
         return new Stmt.Return(keyword, value);
     }
 
@@ -297,7 +376,7 @@ public partial class Parser
     {
         Token keyword = Previous();
         Expr value = Expression();
-        Consume(TokenType.SEMICOLON, "Expect ';' after throw value.");
+        ConsumeSemicolonWithASI("Expect ';' after throw value.");
         return new Stmt.Throw(keyword, value);
     }
 
@@ -382,10 +461,10 @@ public partial class Parser
         // Handle console.log specially for MVP
         if (expr is Expr.Call call && call.Callee is Expr.Variable varExpr && varExpr.Name.Lexeme == "console.log")
         {
-             // Simplified for MVP
+            // Simplified for MVP
         }
 
-        Consume(TokenType.SEMICOLON, "Expect ';' after expression.");
+        ConsumeSemicolonWithASI("Expect ';' after expression.");
         return new Stmt.Expression(expr);
     }
 }

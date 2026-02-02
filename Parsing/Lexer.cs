@@ -108,6 +108,7 @@ public class Lexer(string source)
         { "while", TokenType.WHILE },
         { "yield", TokenType.YIELD },
         { "using", TokenType.USING },
+        { "var", TokenType.VAR },
         { "void", TokenType.VOID },
         { "delete", TokenType.DELETE },
         { "string", TokenType.TYPE_STRING },
@@ -335,6 +336,15 @@ public class Lexer(string source)
         {
             type = TokenType.IDENTIFIER;
         }
+
+        // Make 'module' always an identifier for JavaScript compatibility
+        // In TypeScript, 'module' is only a keyword in specific contexts (module declarations)
+        // which are handled separately in the parser
+        if (type == TokenType.MODULE)
+        {
+            type = TokenType.IDENTIFIER;
+        }
+
         AddToken(type);
     }
 

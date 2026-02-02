@@ -112,7 +112,7 @@ public partial class Parser
                         access = AccessModifier.Public;
                     }
 
-                    Token paramName = Consume(TokenType.IDENTIFIER, "Expect parameter name.");
+                    Token paramName = ConsumeIdentifierAllowingTypeKeywords("Expect parameter name.");
 
                     // Check for optional parameter marker (?)
                     bool isOptional = Match(TokenType.QUESTION);
@@ -211,7 +211,7 @@ public partial class Parser
                 // Check for rest parameter
                 bool isRest = Match(TokenType.DOT_DOT_DOT);
 
-                Token paramName = Consume(TokenType.IDENTIFIER, "Expect parameter name.");
+                Token paramName = ConsumeIdentifierAllowingTypeKeywords("Expect parameter name.");
                 string? paramType = null;
                 if (Match(TokenType.COLON))
                 {

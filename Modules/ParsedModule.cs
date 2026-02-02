@@ -92,6 +92,12 @@ public class ParsedModule
     public bool IsBuiltIn { get; set; }
 
     /// <summary>
+    /// Whether this is a JSON file.
+    /// JSON files are parsed as JSON and exported as objects.
+    /// </summary>
+    public bool IsJson { get; set; }
+
+    /// <summary>
     /// True if file has no import/export statements (is a "script" file).
     /// Scripts share global scope; modules have isolated scope.
     /// </summary>

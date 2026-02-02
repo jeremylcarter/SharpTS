@@ -2,14 +2,39 @@ namespace SharpTS.Parsing;
 
 public partial class Parser
 {
-    private Expr Expression() => Assignment();
+    /// <summary>
+    /// Parses an expression. Handles comma expressions at the lowest precedence.
+    /// </summary>
+    private Expr Expression()
+    {
+        Expr expr = Assignment();
+
+        // Handle comma operator (lowest precedence in JavaScript)
+        while (Match(TokenType.COMMA))
+        {
+            Expr right = Assignment();
+            expr = new Expr.Comma(expr, right);
+        }
+
+        return expr;
+    }
+
+    /// <summary>
+    /// Parses an assignment expression without handling comma.
+    /// Used internally and where comma has special meaning (function args, array literals).
+    /// </summary>
+    private Expr AssignmentExpression() => Assignment();
 
     private Expr Assignment()
     {
         // Check for single-parameter arrow function without parentheses: x => expr
-        if (Check(TokenType.IDENTIFIER) && CheckNext(TokenType.ARROW))
+        // Also allow type keywords as parameter name (JavaScript compatibility: string => ...)
+        if ((Check(TokenType.IDENTIFIER) || IsTypeKeyword(Peek().Type) || Peek().Type is TokenType.TYPE or TokenType.STATIC) && CheckNext(TokenType.ARROW))
         {
-            Token paramName = Advance(); // consume identifier
+            Token paramToken = Advance(); // consume identifier or keyword
+            // Convert keyword to identifier if needed
+            Token paramName = paramToken.Type == TokenType.IDENTIFIER ? paramToken
+                : new Token(TokenType.IDENTIFIER, paramToken.Lexeme, null, paramToken.Line);
             Advance(); // consume '=>'
 
             // Parse the body - either block or expression
@@ -370,11 +395,15 @@ public partial class Parser
             {
                 do
                 {
-                    arguments.Add(Expression());
+                    // Use Assignment() not Expression() to avoid comma operator in arguments
+                    arguments.Add(Assignment());
                 } while (Match(TokenType.COMMA));
             }
             Consume(TokenType.RIGHT_PAREN, "Expect ')' after arguments.");
-            return new Expr.New(callee, typeArgs, arguments);
+
+            // Allow postfix operations on new expressions: new Date().toISOString()
+            Expr newExpr = new Expr.New(callee, typeArgs, arguments);
+            return ParseCallChain(newExpr);
         }
 
         return Call();
@@ -383,7 +412,16 @@ public partial class Parser
     private Expr Call()
     {
         Expr expr = Primary();
+        return ParseCallChain(expr);
+    }
 
+    /// <summary>
+    /// Parses postfix operations on an expression: method calls, property access,
+    /// index access, type assertions, non-null assertions, and tagged templates.
+    /// This is extracted to allow reuse after parsing new expressions.
+    /// </summary>
+    private Expr ParseCallChain(Expr expr)
+    {
         while (true)
         {
             // Check for type arguments before call: func<T>(args)
@@ -412,13 +450,14 @@ public partial class Parser
                         {
                             do
                             {
+                                // Use Assignment() to avoid comma operator in arguments
                                 if (Match(TokenType.DOT_DOT_DOT))
                                 {
-                                    args.Add(new Expr.Spread(Expression()));
+                                    args.Add(new Expr.Spread(Assignment()));
                                 }
                                 else
                                 {
-                                    args.Add(Expression());
+                                    args.Add(Assignment());
                                 }
                             } while (Match(TokenType.COMMA));
                         }
@@ -514,13 +553,14 @@ public partial class Parser
         {
             do
             {
+                // Use Assignment() not Expression() to avoid comma operator in arguments
                 if (Match(TokenType.DOT_DOT_DOT))
                 {
-                    arguments.Add(new Expr.Spread(Expression()));
+                    arguments.Add(new Expr.Spread(Assignment()));
                 }
                 else
                 {
-                    arguments.Add(Expression());
+                    arguments.Add(Assignment());
                 }
             } while (Match(TokenType.COMMA));
         }
@@ -630,6 +670,16 @@ public partial class Parser
 
         if (Match(TokenType.IDENTIFIER)) return new Expr.Variable(Previous());
 
+        // Allow type keywords and contextual keywords as identifiers in expressions (JavaScript compatibility)
+        // e.g., var string = "hello"; console.log(string);
+        // Also allow 'type' and 'static' which are contextual in TypeScript
+        if (IsTypeKeyword(Peek().Type) || Peek().Type is TokenType.TYPE or TokenType.STATIC)
+        {
+            Token typeToken = Advance();
+            // Convert to identifier token for consistency
+            return new Expr.Variable(new Token(TokenType.IDENTIFIER, typeToken.Lexeme, null, typeToken.Line));
+        }
+
         // Symbol and BigInt are special callable constructors
         if (Match(TokenType.SYMBOL, TokenType.BIGINT)) return new Expr.Variable(Previous());
 
@@ -643,13 +693,14 @@ public partial class Parser
                     // Handle trailing comma: [1, 2, 3,]
                     if (Check(TokenType.RIGHT_BRACKET)) break;
 
+                    // Use Assignment() not Expression() to avoid comma operator in elements
                     if (Match(TokenType.DOT_DOT_DOT))
                     {
-                        elements.Add(new Expr.Spread(Expression()));
+                        elements.Add(new Expr.Spread(Assignment()));
                     }
                     else
                     {
-                        elements.Add(Expression());
+                        elements.Add(Assignment());
                     }
                 } while (Match(TokenType.COMMA));
             }
@@ -670,7 +721,8 @@ public partial class Parser
                     // Check for spread: { ...obj }
                     if (Match(TokenType.DOT_DOT_DOT))
                     {
-                        Expr spreadExpr = Expression();
+                        // Use Assignment() to avoid comma operator in spread
+                        Expr spreadExpr = Assignment();
                         properties.Add(new Expr.Property(null, spreadExpr, IsSpread: true));
                         continue;
                     }
@@ -678,6 +730,7 @@ public partial class Parser
                     // Check for computed property key: { [expr]: value } or method shorthand { [expr]() {} }
                     if (Match(TokenType.LEFT_BRACKET))
                     {
+                        // Full Expression() allowed in computed keys
                         Expr keyExpr = Expression();
                         Consume(TokenType.RIGHT_BRACKET, "Expect ']' after computed property key.");
 
@@ -705,7 +758,7 @@ public partial class Parser
                                 {
                                     // Check for rest parameter
                                     bool isRest = Match(TokenType.DOT_DOT_DOT);
-                                    Token paramName = Consume(TokenType.IDENTIFIER, "Expect parameter name.");
+                                    Token paramName = ConsumeIdentifierAllowingTypeKeywords("Expect parameter name.");
                                     bool isOptional = Match(TokenType.QUESTION);
                                     string? paramType = null;
                                     if (Match(TokenType.COLON))
@@ -753,7 +806,7 @@ public partial class Parser
 
                         // Regular computed property: { [expr]: value }
                         Consume(TokenType.COLON, "Expect ':' after computed property key.");
-                        Expr computedValue = Expression();
+                        Expr computedValue = Assignment();
                         properties.Add(new Expr.Property(new Expr.ComputedKey(keyExpr), computedValue));
                         continue;
                     }
@@ -763,7 +816,7 @@ public partial class Parser
                     {
                         Token stringKey = Previous();
                         Consume(TokenType.COLON, "Expect ':' after string property key.");
-                        Expr stringValue = Expression();
+                        Expr stringValue = Assignment();
                         properties.Add(new Expr.Property(new Expr.LiteralKey(stringKey), stringValue));
                         continue;
                     }
@@ -773,7 +826,7 @@ public partial class Parser
                     {
                         Token numberKey = Previous();
                         Consume(TokenType.COLON, "Expect ':' after number property key.");
-                        Expr numberValue = Expression();
+                        Expr numberValue = Assignment();
                         properties.Add(new Expr.Property(new Expr.LiteralKey(numberKey), numberValue));
                         continue;
                     }
@@ -891,7 +944,7 @@ public partial class Parser
                             {
                                 // Check for rest parameter
                                 bool isRest = Match(TokenType.DOT_DOT_DOT);
-                                Token paramName = Consume(TokenType.IDENTIFIER, "Expect parameter name.");
+                                Token paramName = ConsumeIdentifierAllowingTypeKeywords("Expect parameter name.");
                                 bool isOptional = Match(TokenType.QUESTION);
                                 string? paramType = null;
                                 if (Match(TokenType.COLON))
@@ -927,7 +980,8 @@ public partial class Parser
                     else if (Match(TokenType.COLON))
                     {
                         // Explicit property: { x: value }
-                        value = Expression();
+                        // Use Assignment() to avoid comma operator in property values
+                        value = Assignment();
                     }
                     else
                     {
@@ -1129,13 +1183,17 @@ public partial class Parser
                     // Check for rest parameter
                     bool isRest = Match(TokenType.DOT_DOT_DOT);
 
-                    if (!Check(TokenType.IDENTIFIER))
+                    // Allow identifier or type keywords as parameter names (JavaScript compatibility)
+                    if (!Check(TokenType.IDENTIFIER) && !IsTypeKeyword(Peek().Type) && Peek().Type is not TokenType.TYPE and not TokenType.STATIC)
                     {
                         _current = savedPosition;
                         return null;
                     }
 
-                    Token paramName = Advance();
+                    Token paramToken = Advance();
+                    // Convert keyword to identifier if needed
+                    Token paramName = paramToken.Type == TokenType.IDENTIFIER ? paramToken
+                        : new Token(TokenType.IDENTIFIER, paramToken.Lexeme, null, paramToken.Line);
                     string? paramType = null;
                     if (Match(TokenType.COLON))
                     {
@@ -1244,8 +1302,9 @@ public partial class Parser
 
         // Optional function name (for named function expressions)
         // Named function expressions have their name visible inside the function body for recursion
+        // Allow 'get' and 'set' as function names (they're contextual keywords)
         Token? functionName = null;
-        if (Check(TokenType.IDENTIFIER))
+        if (Check(TokenType.IDENTIFIER) || Check(TokenType.GET) || Check(TokenType.SET))
         {
             functionName = Advance();
         }
@@ -1308,7 +1367,7 @@ public partial class Parser
                     // Check for rest parameter
                     bool isRest = Match(TokenType.DOT_DOT_DOT);
 
-                    Token paramName = Consume(TokenType.IDENTIFIER, "Expect parameter name.");
+                    Token paramName = ConsumeIdentifierAllowingTypeKeywords("Expect parameter name.");
 
                     // Check for optional parameter marker (?)
                     bool isOptional = Match(TokenType.QUESTION);

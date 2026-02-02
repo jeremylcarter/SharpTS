@@ -671,6 +671,13 @@ public partial class TypeChecker : IExprVisitor<TypeInfo>, IStmtVisitor<VoidResu
     /// </summary>
     private void CollectModuleExports(ParsedModule module)
     {
+        // For .js files (CommonJS), assume module.exports is the default export with type 'any'
+        // This enables ESM-style imports from CommonJS modules
+        if (module.Path.EndsWith(".js", StringComparison.OrdinalIgnoreCase))
+        {
+            module.DefaultExportType ??= new TypeInfo.Any();
+        }
+
         var moduleEnv = new TypeEnvironment(_environment);
 
         using (new EnvironmentScope(this, moduleEnv))
@@ -687,107 +694,107 @@ public partial class TypeChecker : IExprVisitor<TypeInfo>, IStmtVisitor<VoidResu
             // Then, process all declarations to populate the environment
             foreach (var stmt in module.Statements)
             {
-            // Skip imports - already bound above
-            if (stmt is Stmt.Import)
-            {
-                continue;
-            }
+                // Skip imports - already bound above
+                if (stmt is Stmt.Import)
+                {
+                    continue;
+                }
 
-            // For exports, process the underlying declaration
-            if (stmt is Stmt.Export export)
-            {
-                if (export.ExportAssignment != null)
+                // For exports, process the underlying declaration
+                if (stmt is Stmt.Export export)
                 {
-                    // CommonJS-style export = value
-                    var type = CheckExpr(export.ExportAssignment);
-                    module.HasExportAssignment = true;
-                    module.ExportAssignmentType = type;
-                }
-                else if (export.Declaration != null)
-                {
-                    CheckStmt(export.Declaration);
-                }
-                else if (export.DefaultExpr != null)
-                {
-                    var type = CheckExpr(export.DefaultExpr);
-                    module.DefaultExportType = type;
-                }
-                else if (export.NamedExports != null && export.FromModulePath == null)
-                {
-                    // Named exports like `export { x, y }` need the declarations to be processed first
-                    // They'll be resolved in the second pass
-                }
-            }
-            else
-            {
-                // Regular declarations
-                CheckStmt(stmt);
-            }
-        }
-
-        // Now collect exports
-        foreach (var stmt in module.Statements)
-        {
-            if (stmt is Stmt.Export export)
-            {
-                if (export.IsDefaultExport)
-                {
-                    if (export.Declaration != null)
+                    if (export.ExportAssignment != null)
                     {
-                        module.DefaultExportType = GetDeclaredType(export.Declaration);
+                        // CommonJS-style export = value
+                        var type = CheckExpr(export.ExportAssignment);
+                        module.HasExportAssignment = true;
+                        module.ExportAssignmentType = type;
                     }
-                    // DefaultExpr already handled above
-                }
-                else if (export.Declaration != null)
-                {
-                    string name = GetDeclarationName(export.Declaration);
-                    var type = GetDeclaredType(export.Declaration);
-                    module.ExportedTypes[name] = type;
-                }
-                else if (export.NamedExports != null && export.FromModulePath == null)
-                {
-                    foreach (var spec in export.NamedExports)
+                    else if (export.Declaration != null)
                     {
-                        var type = _environment.Get(spec.LocalName.Lexeme);
-                        if (type != null)
+                        CheckStmt(export.Declaration);
+                    }
+                    else if (export.DefaultExpr != null)
+                    {
+                        var type = CheckExpr(export.DefaultExpr);
+                        module.DefaultExportType = type;
+                    }
+                    else if (export.NamedExports != null && export.FromModulePath == null)
+                    {
+                        // Named exports like `export { x, y }` need the declarations to be processed first
+                        // They'll be resolved in the second pass
+                    }
+                }
+                else
+                {
+                    // Regular declarations
+                    CheckStmt(stmt);
+                }
+            }
+
+            // Now collect exports
+            foreach (var stmt in module.Statements)
+            {
+                if (stmt is Stmt.Export export)
+                {
+                    if (export.IsDefaultExport)
+                    {
+                        if (export.Declaration != null)
                         {
-                            string exportedName = spec.ExportedName?.Lexeme ?? spec.LocalName.Lexeme;
-                            module.ExportedTypes[exportedName] = type;
+                            module.DefaultExportType = GetDeclaredType(export.Declaration);
+                        }
+                        // DefaultExpr already handled above
+                    }
+                    else if (export.Declaration != null)
+                    {
+                        string name = GetDeclarationName(export.Declaration);
+                        var type = GetDeclaredType(export.Declaration);
+                        module.ExportedTypes[name] = type;
+                    }
+                    else if (export.NamedExports != null && export.FromModulePath == null)
+                    {
+                        foreach (var spec in export.NamedExports)
+                        {
+                            var type = _environment.Get(spec.LocalName.Lexeme);
+                            if (type != null)
+                            {
+                                string exportedName = spec.ExportedName?.Lexeme ?? spec.LocalName.Lexeme;
+                                module.ExportedTypes[exportedName] = type;
+                            }
                         }
                     }
-                }
-                else if (export.FromModulePath != null)
-                {
-                    // Re-export - resolve from the source module
-                    string sourcePath = _moduleResolver!.ResolveModulePath(export.FromModulePath, module.Path);
-                    var sourceModule = _moduleResolver.GetCachedModule(sourcePath);
-
-                    if (sourceModule != null)
+                    else if (export.FromModulePath != null)
                     {
-                        if (export.NamedExports != null)
+                        // Re-export - resolve from the source module
+                        string sourcePath = _moduleResolver!.ResolveModulePath(export.FromModulePath, module.Path);
+                        var sourceModule = _moduleResolver.GetCachedModule(sourcePath);
+
+                        if (sourceModule != null)
                         {
-                            // Re-export specific names
-                            foreach (var spec in export.NamedExports)
+                            if (export.NamedExports != null)
                             {
-                                if (sourceModule.ExportedTypes.TryGetValue(spec.LocalName.Lexeme, out var type))
+                                // Re-export specific names
+                                foreach (var spec in export.NamedExports)
                                 {
-                                    string exportedName = spec.ExportedName?.Lexeme ?? spec.LocalName.Lexeme;
-                                    module.ExportedTypes[exportedName] = type;
+                                    if (sourceModule.ExportedTypes.TryGetValue(spec.LocalName.Lexeme, out var type))
+                                    {
+                                        string exportedName = spec.ExportedName?.Lexeme ?? spec.LocalName.Lexeme;
+                                        module.ExportedTypes[exportedName] = type;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // Re-export all: export * from './module'
+                                foreach (var (name, type) in sourceModule.ExportedTypes)
+                                {
+                                    module.ExportedTypes[name] = type;
                                 }
                             }
                         }
-                        else
-                        {
-                            // Re-export all: export * from './module'
-                            foreach (var (name, type) in sourceModule.ExportedTypes)
-                            {
-                                module.ExportedTypes[name] = type;
-                            }
-                        }
                     }
                 }
             }
-        }
         }
     }
 
@@ -811,11 +818,12 @@ public partial class TypeChecker : IExprVisitor<TypeInfo>, IStmtVisitor<VoidResu
                 // Default import
                 if (import.DefaultImport != null)
                 {
-                    if (importedModule.DefaultExportType == null)
+                    var defaultType = importedModule.DefaultExportType;
+                    if (defaultType == null)
                     {
                         throw new TypeCheckException($"Module '{import.ModulePath}' has no default export", import.Keyword.Line);
                     }
-                    env.Define(import.DefaultImport.Lexeme, importedModule.DefaultExportType);
+                    env.Define(import.DefaultImport.Lexeme, defaultType);
                 }
 
                 // Namespace import: import * as Module from './file'

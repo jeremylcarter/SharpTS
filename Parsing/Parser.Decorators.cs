@@ -51,7 +51,8 @@ public partial class Parser
             {
                 do
                 {
-                    arguments.Add(Expression());
+                    // Use Assignment() to avoid comma operator in arguments
+                    arguments.Add(Assignment());
                 } while (Match(TokenType.COMMA));
             }
             Token paren = Consume(TokenType.RIGHT_PAREN, "Expect ')' after decorator arguments.");

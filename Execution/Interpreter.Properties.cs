@@ -129,7 +129,7 @@ public partial class Interpreter
 
         if (klass is not SharpTSClass sharpClass)
         {
-             throw new Exception("Type Error: Can only instantiate classes.");
+            throw new Exception("Type Error: Can only instantiate classes.");
         }
 
         // Runtime check for abstract class instantiation (backup to type checker)
@@ -358,7 +358,7 @@ public partial class Interpreter
             return accessor.GetProperty(memberName);
         }
 
-        // Handle built-in instance members: strings, arrays, Math, Promise
+        // Handle built-in instance members: strings, arrays, Math, Promise, functions
         if (obj != null)
         {
             var member = BuiltInRegistry.Instance.GetInstanceMember(obj, memberName);
@@ -370,15 +370,32 @@ public partial class Interpreter
                 return member;
             }
 
+            // For functions, check custom properties (like prototype) after built-ins
+            if (obj is SharpTSFunction func)
+            {
+                var funcProp = func.GetProperty(memberName);
+                if (funcProp != null) return funcProp;
+            }
+            if (obj is SharpTSArrowFunction arrowFunc)
+            {
+                var arrowProp = arrowFunc.GetProperty(memberName);
+                if (arrowProp != null) return arrowProp;
+            }
+
             // If we have a built-in type but didn't find the member, throw a specific error
-            if (BuiltInRegistry.Instance.HasInstanceMembers(obj))
+            // Skip this for functions since they may have custom properties that return null
+            if (BuiltInRegistry.Instance.HasInstanceMembers(obj) && obj is not SharpTSFunction && obj is not SharpTSArrowFunction)
             {
                 string typeName = GetRuntimeTypeName(obj);
                 throw new Exception($"Runtime Error: Property '{memberName}' does not exist on {typeName}.");
             }
         }
 
-        throw new Exception("Only instances and objects have properties.");
+        var objType = obj?.GetType().Name ?? "null";
+        var location = _currentModule?.Path != null
+            ? $" in '{_currentModule.Path}'"
+            : "";
+        throw new Exception($"Only instances and objects have properties. Got: {objType}, member: '{memberName}'{location}.");
     }
 
     /// <summary>
@@ -510,7 +527,22 @@ public partial class Interpreter
             throw new Exception($"Runtime Error: Cannot set property '{set.Name.Lexeme}' on Error.");
         }
 
-        throw new Exception("Only instances and objects have fields.");
+        // Handle function property assignment (functions are objects in JavaScript)
+        if (obj is SharpTSFunction func)
+        {
+            func.SetProperty(set.Name.Lexeme, value);
+            return value;
+        }
+        if (obj is SharpTSArrowFunction arrowFunc)
+        {
+            arrowFunc.SetProperty(set.Name.Lexeme, value);
+            return value;
+        }
+
+        var location = _currentModule?.Path != null
+            ? $" in '{_currentModule.Path}' at line {set.Name.Line}"
+            : $" at line {set.Name.Line}";
+        throw new Exception($"Only instances and objects have fields{location}.");
     }
 
     /// <summary>
@@ -526,7 +558,7 @@ public partial class Interpreter
     private object? EvaluateAssign(Expr.Assign assign)
     {
         object? value = Evaluate(assign.Value);
-        
+
         if (_locals.TryGetValue(assign, out int distance))
         {
             _environment.AssignAt(distance, assign.Name, value);

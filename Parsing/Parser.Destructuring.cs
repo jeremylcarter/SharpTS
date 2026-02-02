@@ -16,7 +16,8 @@ public partial class Parser
             return new RestPattern(restName);
         }
 
-        Token patternName = Consume(TokenType.IDENTIFIER, "Expect identifier in pattern.");
+        // Allow type keywords as identifiers in patterns (JavaScript compatibility)
+        Token patternName = ConsumeIdentifierAllowingTypeKeywords("Expect identifier in pattern.");
         Expr? defaultValue = Match(TokenType.EQUAL) ? Expression() : null;
         return new IdentifierPattern(patternName, defaultValue);
     }
@@ -116,7 +117,7 @@ public partial class Parser
 
         Consume(TokenType.EQUAL, "Expect '=' after destructuring pattern.");
         Expr initializer = Expression();
-        Consume(TokenType.SEMICOLON, "Expect ';' after variable declaration.");
+        ConsumeSemicolonWithASI("Expect ';' after variable declaration.");
 
         return DesugarArrayPattern(pattern, initializer);
     }
@@ -132,7 +133,7 @@ public partial class Parser
 
         Consume(TokenType.EQUAL, "Expect '=' after destructuring pattern.");
         Expr initializer = Expression();
-        Consume(TokenType.SEMICOLON, "Expect ';' after variable declaration.");
+        ConsumeSemicolonWithASI("Expect ';' after variable declaration.");
 
         return DesugarObjectPattern(pattern, initializer);
     }

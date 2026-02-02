@@ -17,6 +17,7 @@ public class AstVisitorTests
         public Type VisitBinary(Expr.Binary expr) => typeof(Expr.Binary);
         public Type VisitLogical(Expr.Logical expr) => typeof(Expr.Logical);
         public Type VisitNullishCoalescing(Expr.NullishCoalescing expr) => typeof(Expr.NullishCoalescing);
+        public Type VisitComma(Expr.Comma expr) => typeof(Expr.Comma);
         public Type VisitTernary(Expr.Ternary expr) => typeof(Expr.Ternary);
         public Type VisitGrouping(Expr.Grouping expr) => typeof(Expr.Grouping);
         public Type VisitLiteral(Expr.Literal expr) => typeof(Expr.Literal);

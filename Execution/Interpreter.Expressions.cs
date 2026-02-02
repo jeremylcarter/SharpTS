@@ -34,6 +34,7 @@ public partial class Interpreter
     public object? VisitBinary(Expr.Binary binary) => EvaluateBinary(binary);
     public object? VisitLogical(Expr.Logical logical) => EvaluateLogical(logical);
     public object? VisitNullishCoalescing(Expr.NullishCoalescing nc) => EvaluateNullishCoalescing(nc);
+    public object? VisitComma(Expr.Comma comma) => EvaluateComma(comma);
     public object? VisitTernary(Expr.Ternary ternary) => EvaluateTernary(ternary);
     public object? VisitGrouping(Expr.Grouping grouping) => Evaluate(grouping.Expression);
     public object? VisitLiteral(Expr.Literal literal) => EvaluateLiteral(literal);

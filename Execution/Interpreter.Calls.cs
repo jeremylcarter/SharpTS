@@ -526,6 +526,16 @@ public partial class Interpreter
         EvaluateNullishCoalescingCore(Evaluate(nc.Left), () => Evaluate(nc.Right));
 
     /// <summary>
+    /// Evaluates a comma expression (sequence expression).
+    /// Evaluates the left expression for side effects, then evaluates and returns the right.
+    /// </summary>
+    private object? EvaluateComma(Expr.Comma comma)
+    {
+        Evaluate(comma.Left);  // Evaluate for side effects
+        return Evaluate(comma.Right);  // Return the right value
+    }
+
+    /// <summary>
     /// Core ternary operation logic, shared between sync and async evaluation.
     /// Uses lazy evaluation via Func delegates to ensure only one branch is evaluated.
     /// </summary>
