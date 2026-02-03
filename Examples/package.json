@@ -6,6 +6,7 @@
   "scripts": {
     "http": "tsx http.ts",
     "http-server": "tsx http-server.ts",
+    "loadtest": "loadtest http://localhost:3000",
     "express": "tsx express.ts"
   },
   "devDependencies": {
